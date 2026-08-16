@@ -21,7 +21,9 @@ The concrete in-process client per stack is owned by the project's stack convent
 | **Integration** | modules cooperating | external systems mocked or substituted; SUT is real | in-process client | mocked |
 | **E2E** | built binary against real infra | nothing | real client | **real** (testcontainers OK) |
 
-The app is *not yet a built binary* in integration. **No testcontainers in integration** — real Postgres for an integration test is e2e.
+What separates the layers is the subject: integration exercises real modules in process, e2e exercises what the build produces.
+
+**No testcontainers in integration** — reaching for a container to get a real service means the test wanted the deployed system, and real Postgres for an integration test is e2e. The exception is a dependency no in-process substitute can stand in for, because the code exists to interact with it: a controller's API server, not a database. Run that as a fixture and the test is still integration, because the subject is still in-process modules.
 
 ## Behavior over implementation
 
