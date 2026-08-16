@@ -4,7 +4,9 @@ A Kubernetes operator that runs `gagent` agent workloads in a cluster from a cus
 
 ## What it does
 
-The operator's purpose is to take an agent's desired configuration, hold it as a custom resource, and reconcile the cluster until that agent is running as a Pod. Bringing the configuration in from an external API is the longer-term intent; which API, and how it is reached, is not decided — see `docs/architecture/README.md` and the open issues.
+The operator's purpose is to take an agent's desired configuration, hold it as a custom resource, and reconcile the cluster until that agent is running as a Pod.
+
+Longer term the configuration comes from `garam`, which also routes messages between agents and tracks their state. The two systems stay separate on purpose, so that someone else can attach their own operator to `garam` instead of this one. How that integration works — the endpoint, the credential, and which side opens the connection — is still open; the tracker carries it. Nothing in this repository depends on `garam` today.
 
 Two things it is not: it is not the agent, which lives in a separate repository, and it is not the source of the configuration.
 
