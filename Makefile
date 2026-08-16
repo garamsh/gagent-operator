@@ -21,6 +21,14 @@ CONTAINER_TOOL ?= docker
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
+# Every `go` invocation below builds with at least the toolchain this module
+# targets. Left unset, `go install` picks the oldest toolchain satisfying the
+# tool's own go directive, which can be older than go.mod targets — golangci-lint
+# built that way then refuses to run against this module. Reading the floor from
+# go.mod keeps the version written in one place, and `+auto` still lets a tool
+# that needs a newer Go fetch one.
+export GOTOOLCHAIN := go$(shell sed -n 's/^go //p' go.mod)+auto
+
 .PHONY: all
 all: build
 
@@ -105,6 +113,14 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 .PHONY: lint-config
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
+
+##@ Checks
+
+# The single name for the whole check set. CI invokes this target, not the
+# commands inside it. `lint` runs before `fmt` so unformatted code fails the
+# check instead of being rewritten and passing.
+.PHONY: ci
+ci: lint-config lint fmt test build ## Run the whole check set — lint, format, test, build.
 
 ##@ Build
 

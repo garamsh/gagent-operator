@@ -17,4 +17,14 @@ Current architecture of the system and the decisions behind it. This file is the
 
 ## Index
 
-_Populated during bootstrap._
+### Responsibility documents
+
+None yet. The operator has no API types and no controllers: `PROJECT` lists no resources, and `api/` and `internal/controller/` do not exist. There is no domain to describe, which Rule 5 makes the correct state. The pull request that scaffolds the first kind adds its document.
+
+### ADRs
+
+| ADR | Decision | Status |
+|---|---|---|
+| `adr/0001-kubebuilder-go-v4-scaffold.md` | Build the operator on the kubebuilder go/v4 scaffold | accepted |
+| `adr/0002-dev-integration-branch.md` | Integrate on `dev` and keep `main` for released state | accepted |
+| `adr/0003-single-stack-convention-file.md` | Govern Go with one stack file written for the operator | accepted |
