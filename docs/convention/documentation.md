@@ -14,7 +14,9 @@ What makes documentation valid in this project. Applies to every file under `doc
 - A PR that changes structure, workflow, or conventions updates the affected docs in the same PR. Stale docs are worse than missing docs.
 - Delete docs that no longer describe anything real. Do not archive.
 - Every claim about this repository must be verifiable in it. If you cannot point at it, remove it.
-- A claim about anything outside it names the release it holds for — `deprecated in v2` can be checked against the library, `deprecated` cannot. A file may name its versions once at the top instead, and then every claim in it holds for those. Where the claim is about a package's health rather than a release (`unmaintained`, `legacy`), do not rest a rule on it: name what to use instead, which does not expire.
+- A claim about anything outside it names what it holds for, precisely enough that a reader can check it there: a release where the project publishes them, a commit where it does not. `deprecated in v2` can be checked against the library and `deprecated` cannot; a path and a line number with neither looks precise and goes on looking valid after the line moves.
+- A file may state once at the top what it was checked against, and then every claim in it holds for that.
+- Where the claim is about a package's health rather than a release (`unmaintained`, `legacy`), do not rest a rule on it: name what to use instead, which does not expire.
 - A claim about the project that will carry this document cannot be checked from here, so it is written as an obligation and not as a description. "`findOneByOrFail` throws, which the global filter maps" asserts a filter this file has never seen; "`findOneByOrFail` throws; map it in the filter at X" is a rule the reader can act on and a reviewer can look for.
 - Update an existing document when the topic is already covered there; do not create a parallel document for a new facet of the same topic. Total document volume is a managed cost — a new file earns its place by adding a topic no existing file owns.
 
