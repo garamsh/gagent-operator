@@ -1,0 +1,35 @@
+# Documentation Conventions
+
+What makes documentation valid in this project. Applies to every file under `docs/` and to GitHub artifacts (issues, PRs, comments). Violations are grounds for PR rejection.
+
+## Keep it maintainable
+
+- **No ASCII art or text diagrams.** Boxes, arrows, and trees drawn with characters break on every edit. Express structure as bulleted lists of paths with one-sentence descriptions, or link to the code.
+- **No implementation detail.** Code is the source of truth for how things work; docs record what exists and why. Do not transcribe function signatures, line-level behavior, or config dumps — they rot.
+- **One file, one responsibility.** Split files by topic, not by length. A file that outgrows a single topic does not get a Contents list as a remedy — it gets split by responsibility, with each piece serving one topic.
+- **Lists and tables over prose.** A rule scannable in 5 seconds beats a paragraph.
+
+## Keep it current
+
+- A PR that changes structure, workflow, or conventions updates the affected docs in the same PR. Stale docs are worse than missing docs.
+- Delete docs that no longer describe anything real. Do not archive.
+- Every claim about this repository must be verifiable in it. If you cannot point at it, remove it.
+- A claim about anything outside it names the release it holds for — `deprecated in v2` can be checked against the library, `deprecated` cannot. A file may name its versions once at the top instead, and then every claim in it holds for those. Where the claim is about a package's health rather than a release (`unmaintained`, `legacy`), do not rest a rule on it: name what to use instead, which does not expire.
+- Update an existing document when the topic is already covered there; do not create a parallel document for a new facet of the same topic. Total document volume is a managed cost — a new file earns its place by adding a topic no existing file owns.
+
+## GitHub artifacts
+
+Issues, PRs, and comments are documentation too.
+
+- **Facts only.** No rhetoric, no self-assessment, no inflated language ("perfect", "massive improvement"). State what changed, where, and why.
+- **Stay inside the template.** No extra sections beyond the template fields; leave no field empty — write `N/A` with a reason.
+- **One comment, one point.** A comment carries a single request, instruction, or question. Ground it by citing a path or a rule, not by arguing.
+
+## Format
+
+- English and Markdown. The H1 is the document's title in title case, or the exact name where the document is named after a file or a repository; every heading below it is sentence case.
+- Start each file with one line stating what it governs.
+- A file past ~50 lines opens with a `## Contents` list of its section headings; a shorter one does not. A Contents list is never the remedy for a file that has outgrown one topic — see §Keep it maintainable.
+- **No decoration.** No emojis, badges, or ornamental headers. This holds for files under `docs/` as much as for GitHub artifacts: a check-mark glyph in a table is decoration where `yes` is a word.
+- Use file paths (`src/auth/service.ts`) instead of drawn hierarchies.
+- File names: lowercase kebab-case (`runtime-safety.md`). Uppercase is reserved for files a tool or a reader looks for by an exact name it did not choose: `README.md`, `AGENTS.md`, `CLAUDE.md`, and the names GitHub requires under `.github/`.
