@@ -224,18 +224,22 @@ Rules:
 
 ## 10. Testing
 
-| Layer | Scope | Runs against | Location |
+| Layer | Scope | Substitute for the cluster | Location |
 |---|---|---|---|
-| Unit | a pure function or builder | nothing | next to the source |
-| Controller | one reconciler | envtest — a real API server and etcd, no kubelet | `internal/controller/` |
-| E2E | the built image | a real cluster, via Kind | `test/e2e/` |
+| Unit | a pure function or builder | none needed | next to the source |
+| Integration | one reconciler, running in process | envtest — a real API server and etcd, no kubelet | `internal/controller/` |
+| E2E | the built image | none; a real cluster, via Kind | `test/e2e/` |
 
-- **Controller tests use envtest, not a fake client.** A fake client does not
+- **envtest is the integration layer's substitute for the cluster.** The
+  reconciler under test is real and in process, and the API server it talks to
+  is a test binary rather than a deployment. The e2e layer is where the built
+  image runs against a cluster nothing substituted.
+- **Integration tests use envtest, not a fake client.** A fake client does not
   run defaulting, validation, or the status subresource, so it proves less than
   it appears to.
-- **envtest has no kubelet.** Pods created in a controller test stay `Pending`
-  forever. A test asserting a Pod reached `Running` belongs in e2e.
-- **Ginkgo v2 and Gomega** are the runner and matcher library for controller and
+- **envtest has no kubelet.** Pods created at this layer stay `Pending` forever.
+  A test asserting a Pod reached `Running` belongs in e2e.
+- **Ginkgo v2 and Gomega** are the runner and matcher library for integration and
   e2e tests; `ginkgolinter` is enabled in `.golangci.yml`. A pure helper with no
   cluster interaction may use stdlib `testing` directly.
 - **E2E tests sit behind `//go:build e2e`.** `go test ./...` does not run them,
