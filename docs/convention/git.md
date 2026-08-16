@@ -11,11 +11,13 @@ How branches, commits, and PR titles are written, and what survives a merge.
 - `refactor/<short-name>` — behavior-preserving restructure
 - `test/<short-name>` — test-only changes
 
-One task, one branch. Branch from `main`; never commit to `main` directly.
+One task, one branch. Branch from `dev`; never commit to `dev` or `main` directly.
+
+`dev` is the integration branch: it is the base every task branch starts from and the target every pull request is opened against. `main` advances only from `dev`, by a release, never by a task.
 
 ## Commits
 
-Only the PR title reaches `main`. A branch's commits are squashed away at merge, so they are a working record for the reviewer reading the branch, not the permanent history.
+Only the PR title reaches `dev`. A branch's commits are squashed away at merge, so they are a working record for the reviewer reading the branch, not the permanent history.
 
 Format: `<type>: <imperative summary>`
 
@@ -29,6 +31,6 @@ Format: `<type>: <imperative summary>`
 
 ## PRs
 
-- Title follows the commit format: `<type>: <imperative summary>`. It becomes the commit on `main`, so it is the permanent record of the change.
+- Title follows the commit format: `<type>: <imperative summary>`. It becomes the commit on `dev`, so it is the permanent record of the change.
 - Body follows `.github/PULL_REQUEST_TEMPLATE.md`.
-- PRs are squash-merged. Branch commits do not appear on `main`; do not rewrite them to be pretty.
+- PRs are squash-merged. Branch commits do not appear on `dev`; do not rewrite them to be pretty.
