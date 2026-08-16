@@ -224,16 +224,12 @@ Rules:
 
 ## 10. Testing
 
-| Layer | Scope | Substitute for the cluster | Location |
-|---|---|---|---|
-| Unit | a pure function or builder | none needed | next to the source |
-| Integration | one reconciler, running in process | envtest — a real API server and etcd, no kubelet | `internal/controller/` |
-| E2E | the built image | none; a real cluster, via Kind | `test/e2e/` |
+| Layer | Runs against | Location |
+|---|---|---|
+| Unit | nothing | next to the source |
+| Integration | envtest — real `kube-apiserver` and `etcd` binaries | `internal/controller/` |
+| E2E | a Kind cluster | `test/e2e/` |
 
-- **envtest is the integration layer's substitute for the cluster.** The
-  reconciler under test is real and in process, and the API server it talks to
-  is a test binary rather than a deployment. The e2e layer is where the built
-  image runs against a cluster nothing substituted.
 - **Integration tests use envtest, not a fake client.** A fake client does not
   run defaulting, validation, or the status subresource, so it proves less than
   it appears to.

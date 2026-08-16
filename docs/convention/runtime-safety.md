@@ -18,7 +18,7 @@ Many runtime errors are bugs the type system could have caught. Catch those at c
 
 Enable the strictest mode your stack supports — strict nullability, no implicit escape to an "unknown/any/object" shape, no implicit conversions. Strictness catches more bugs at compile time than it costs in effort.
 
-- **No silent assertions.** Type assertions, lint suppressions, and unchecked casts silence the type system without fixing the underlying mismatch. Find the root cause; assertions and suppressions are not accepted.
+- **No silent assertions.** An assertion, cast, or lint suppression that does not check its own result silences the type system without fixing the underlying mismatch. Find the root cause. Where a language leaves no other way to read a value — out of an untyped container, for one — assert in the form that branches on failure; the unchecked form is still not accepted.
 - **Non-nullable by default.** A type that allows absence everywhere spreads absence-handling through every caller. Mark absence explicitly (with an `Option` / `Maybe` / `Result` shape or a nullable wrapper) only where it is a real state — never as a default.
 - **Domain primitives over raw types.** Define `UserId`, `Money`, `Email` as distinct named types (newtypes, branded types, value objects) rather than as raw strings or numbers. They prevent passing the wrong value at the type level.
 
