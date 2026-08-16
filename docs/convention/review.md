@@ -30,6 +30,7 @@ Decision: approve / request changes / reject
 
 - An approve requires the Scope, Verification, and Depth rows to read `pass`. The other three may read `unverified`, with a stated reason (some PRs touch nothing a convention governs). A `fail` in any row is a request-changes or a reject, never an approve.
 - A check you did not verify is marked `unverified` — never guessed. Skipping a check is allowed; hiding the skip is not. A review full of `unverified` rows tells the reader the review did not really happen.
+- **The evidence has to test the row it sits in.** A cheap command usually answers a question adjacent to the one asked, and a clean answer looks the same either way. A checksum answers whether a file changed; where the row asks whether a measured value changed, it is the wrong instrument even on every file where the two agree.
 - **Reject maps to request changes.** GitHub has no `reject` review state, so a reject decision is submitted as a request-changes review whose decision line reads `reject` (in single-account setups, the `comment` substitute per §Single-account setups). What reject does that request changes does not: the reviewer closes the PR and files an issue describing the right direction.
 
 ## What each check verifies
