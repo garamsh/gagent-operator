@@ -278,3 +278,9 @@ These sit behind the project's entry-point names.
 | Run against the current kubecontext | `make run` |
 
 `make ci` is what CI invokes. Run it before pushing.
+
+**A target that has something to report prints it itself, before invoking
+`go test`.** `go test` prints only `ok <pkg>` for a package that passes and
+discards the rest of that package's output; the full output appears on failure,
+or under `-v`. So anything a test binary prints about what it covered is
+missing from exactly the run that needed it — the one that passed.
