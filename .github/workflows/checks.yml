@@ -1,4 +1,4 @@
-name: Tests
+name: Checks
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 permissions: {}
 
 jobs:
-  test:
+  checks:
     permissions:
       contents: read
     name: Run on Ubuntu
@@ -23,7 +23,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Running Tests
-        run: |
-          go mod tidy
-          make test
+      - name: Run the check set
+        run: make ci
+
+      - name: Verify generated and formatted output is committed
+        run: git diff --exit-code
