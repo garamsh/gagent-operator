@@ -21,6 +21,14 @@ CONTAINER_TOOL ?= docker
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
+# Every `go` invocation below builds with at least the toolchain this module
+# targets. Left unset, `go install` picks the oldest toolchain satisfying the
+# tool's own go directive, which can be older than go.mod targets — golangci-lint
+# built that way then refuses to run against this module. Reading the floor from
+# go.mod keeps the version written in one place, and `+auto` still lets a tool
+# that needs a newer Go fetch one.
+export GOTOOLCHAIN := go$(shell sed -n 's/^go //p' go.mod)+auto
+
 .PHONY: all
 all: build
 
@@ -202,12 +210,6 @@ GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
 
-# Build tools with the Go toolchain this module targets. Left unset, `go install`
-# picks the oldest toolchain satisfying the tool's own go directive, which can be
-# older than go.mod targets; golangci-lint then refuses to run against this module.
-# Pinning it makes a local run and a CI run build the same binary.
-GO_TOOLCHAIN ?= go$(shell go list -m -f '{{.GoVersion}}')
-
 #ENVTEST_VERSION is the controller-runtime version to use for setup-envtest, derived from go.mod
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
@@ -248,7 +250,7 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
 	@test -f .custom-gcl.yml && { \
 		echo "Building custom golangci-lint with plugins..." && \
-		GOTOOLCHAIN=$(GO_TOOLCHAIN) $(GOLANGCI_LINT) custom --destination $(LOCALBIN) --name golangci-lint-custom && \
+		$(GOLANGCI_LINT) custom --destination $(LOCALBIN) --name golangci-lint-custom && \
 		mv -f $(LOCALBIN)/golangci-lint-custom $(GOLANGCI_LINT); \
 	} || true
 
@@ -262,7 +264,7 @@ set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f "$(1)" ;\
-GOBIN="$(LOCALBIN)" GOTOOLCHAIN=$(GO_TOOLCHAIN) go install $${package} ;\
+GOBIN="$(LOCALBIN)" go install $${package} ;\
 mv "$(LOCALBIN)/$$(basename "$(1)")" "$(1)-$(3)" ;\
 } ;\
 ln -sf "$$(realpath "$(1)-$(3)")" "$(1)"
