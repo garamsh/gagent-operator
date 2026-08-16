@@ -87,6 +87,14 @@ Rules:
   `kubebuilder create api` scaffold silently incomplete.
 - Editing generated output to fix a problem is the wrong layer. Change the
   marker or the type and regenerate.
+- **Upgrade with `kubebuilder alpha update`.** It three-way merges a newer
+  scaffold onto this project and reads `cliVersion` from `PROJECT`, so that
+  field is kept current. `alpha generate` is not the upgrade path: it
+  re-scaffolds in place and deletes everything except `.git` and `PROJECT`.
+- **The scaffold carries its own `AGENTS.md`.** kubebuilder writes one into
+  every project. This repository's `AGENTS.md` is the contribution contract and
+  outranks it. An upgrade that offers to replace that file is refused; its other
+  changes are taken normally.
 
 ## 3. API types
 
@@ -96,13 +104,22 @@ Rules:
 - **Every field carries a doc comment.** It becomes the `description` in the
   CRD and is what a user of the API reads; it is the one comment that is part
   of the published surface.
-- **Optional fields are explicit**: `+optional` with `omitempty`, and a pointer
-  where the zero value is meaningful.
+- **Follow the scaffold's tag style.** `metav1.ObjectMeta` and `Status` take
+  `json:",omitzero"`; `Spec` is a non-pointer carrying no omit tag and marked
+  `+required`. Optional fields are marked `+optional`, with a pointer where the
+  zero value is meaningful. This is not the general Go struct-tag habit, and
+  matching it keeps hand-written types indistinguishable from generated ones.
 - **Validation belongs in markers** (§5), not in Reconcile, wherever a marker
   can express it. A rejection the API server can make never reaches a
   controller.
-- **Status carries conditions.** `Conditions []metav1.Condition`, written only
-  through `meta.SetStatusCondition`, never appended by hand.
+- **Status conditions are scaffolded, not added.** The generated `Status`
+  already carries `Conditions []metav1.Condition` with `+listType=map` and
+  `+listMapKey=type`. Keep those markers — they are what makes the list
+  server-side-apply safe — and write the slice only through
+  `meta.SetStatusCondition`, never by appending.
+- **Re-read the object before updating it again.** A status update bumps the
+  resource version, so a second write in the same reconcile using the stale copy
+  fails with a conflict.
 - **Status carries `observedGeneration`**, set to the object's `Generation` at
   the end of a successful reconcile, so a stale status is detectable.
 - An API version is immutable once released. A change that would break an
@@ -116,7 +133,12 @@ Rules:
 - **Running Reconcile twice on the same state changes nothing the second time.**
   This is the property every other rule here protects.
 - **Never sleep.** To retry later, return `ctrl.Result{RequeueAfter: d}`. A
-  blocked worker starves every other object of the same kind.
+  blocked worker starves every other object of the same kind. `Requeue: true` is
+  deprecated and is not the alternative.
+- **`SetupWithManager` names the controller.** The scaffold emits
+  `.Named("<kind>")`; keep it. A kind may carry more than one controller
+  (`create api --controller-name`, recorded as a `controllers:` array in
+  `PROJECT`), and the name is what separates them in logs and metrics.
 - **Return the error.** controller-runtime's backoff is the retry mechanism;
   swallowing an error to keep the queue quiet hides a stuck object.
 - **A missing object is not an error.** `apierrors.IsNotFound(err)` returns
@@ -140,9 +162,14 @@ Rules:
   hand is a §2 violation and is reverted on the next generate.
 - **A permission a controller does not exercise is removed.** The manager runs
   with the union of every marker in the tree.
+- **Emitting an event needs RBAC on `events.k8s.io`, not the core group.** The
+  recorder moved to `k8s.io/client-go/tools/events`; a marker naming the core
+  group grants nothing.
 - **CRD validation markers sit on the field they constrain** — `+kubebuilder:validation:*`
   for bounds and formats, `+kubebuilder:default` for defaults,
-  `+kubebuilder:printcolumn` on the type for `kubectl get` output.
+  `+kubebuilder:printcolumn` on the type for `kubectl get` output. Cross-field
+  constraints belong here too, not in Reconcile: `ExactlyOneOf`, `AtLeastOneOf`,
+  `AtMostOneOf`, `+k8s:immutable`, and CEL through `+kubebuilder:validation:XValidation`.
 - A marker's effect is verified by reading the regenerated file, not by
   assuming the marker parsed.
 
@@ -171,9 +198,11 @@ Rules:
 
 ## 8. Logging
 
-- **Use the logger from the context**: `log.FromContext(ctx)`. It carries the
-  controller name, the object's namespace and name, and the reconcile ID.
-  Constructing a fresh logger drops that correlation.
+- **Use the logger from the context**: the scaffold imports
+  `logf "sigs.k8s.io/controller-runtime/pkg/log"` and calls `logf.FromContext(ctx)`.
+  Keep the alias. The returned logger carries the controller name, the object's
+  namespace and name, and the reconcile ID; constructing a fresh one drops that
+  correlation.
 - **`logr`, not `log/slog`.** controller-runtime's logging is `logr` end to
   end, and `cmd/main.go` installs a zap-backed implementation.
 - **Structured key-value pairs, balanced.** `logcheck` is enabled in
@@ -209,6 +238,10 @@ Rules:
 - **Ginkgo v2 and Gomega** are the runner and matcher library for controller and
   e2e tests; `ginkgolinter` is enabled in `.golangci.yml`. A pure helper with no
   cluster interaction may use stdlib `testing` directly.
+- **E2E tests sit behind `//go:build e2e`.** `go test ./...` does not run them,
+  and `make test` excludes the directory as well; only `make test-e2e` does. A
+  test that needs a cluster and is not behind the tag will fail every ordinary
+  run.
 - **Assert on observed state, not on calls.** Read the object back and assert
   its Spec and Status; do not assert that a client method was invoked.
 - **Eventual assertions use `Eventually`** with an explicit timeout. Reconcile
