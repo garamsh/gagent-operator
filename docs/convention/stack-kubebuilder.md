@@ -143,6 +143,13 @@ Rules:
   swallowing an error to keep the queue quiet hides a stuck object.
 - **A missing object is not an error.** `apierrors.IsNotFound(err)` returns
   `ctrl.Result{}, nil` — the object is gone and there is nothing to reconcile.
+- **Neither is a failure that retrying cannot fix.** A spec the API server
+  accepted but this controller cannot act on — an image reference that does not
+  parse, a field naming a kind this controller does not support — returns
+  `ctrl.Result{}, nil` with the reason on a status condition. Returned as an
+  error it requeues forever, and the only account of why the object is stuck
+  sits in the manager's log rather than on the object the user can read. The fix
+  is a spec edit, which wakes the controller on its own.
 - **Owned objects carry an owner reference.** Set it with
   `controllerutil.SetControllerReference` and watch the kind with `Owns()`, so
   deletion cascades and changes wake the owner.
