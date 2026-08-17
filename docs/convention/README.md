@@ -44,6 +44,8 @@ A stack file states the concrete form of what a stack-neutral file governs: the 
 
 A stack built on another stack takes a row with a base in the Extends column. The derived file holds only the rules its stack changes — one rule, not the section around it — and the base governs every rule it does not, so a project keeping the derived file keeps the base too. A base has no base of its own: one level, so that opening two files is always enough.
 
+Silence in the derived file is not evidence that a base rule survives. A derived stack can defeat a base rule without contradicting it — the base says define the metrics registry once, the derived framework serves only a registry it made itself, and registering in the one the base named succeeds and appears nowhere. So the base is read in full when the row is added, and each later change to a base rule is read against every file extending it.
+
 ## Independence
 
 Reading a convention file is enough to apply its rules. Where the Extends column gives it a base, it is that file and its base, and there reading stops.
