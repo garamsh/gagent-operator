@@ -9,7 +9,10 @@ OCI image the project builds, whatever builds it.
 - **`FROM <image>@sha256:…`.** A tag is a name that can be moved to
   different content; a digest is the content. Two builds a month apart
   from the same tag are not the same base, and nothing in the file
-  records that they differ.
+  records that they differ. Take the digest of the multi-platform
+  index, not of one platform's manifest: the mismatch is a warning and
+  an exit code of zero, and the image that ships is labelled for a
+  platform it was not built on.
 - **A build secret arrives on a mount, never in a layer.**
   `RUN --mount=type=secret,id=…` exists so a secret is not baked into
   the image or the build cache. Anything a stage copies in is a layer,
