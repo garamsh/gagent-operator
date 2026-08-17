@@ -195,11 +195,30 @@ Rules:
 
 ## 7. Error handling
 
-- Errors are values. Wrap with `fmt.Errorf("op: %w", err)` at boundaries — an
-  API call, an external request, a parse — not on every line.
-- Sentinels are declared where the concept lives and compared with `errors.Is`.
-- Do not log and return the same error. Reconcile returns it; controller-runtime
-  logs and requeues.
+- **An adapter translates before it returns.** The client that talks to an
+  external API turns that library's error into one this module declares; the
+  library's error type does not leave the file that imports the library. What an
+  implementation returns is part of the interface it satisfies, so one that
+  leaks its library's errors is not one a fake can stand in for.
+- **Sentinel, typed, or opaque — what the caller does decides which.** A
+  sentinel (`var ErrX = errors.New(...)`, read with `errors.Is`) where the
+  caller branches on which failure and the failure carries no data. A typed
+  error (a struct with `Error()`, read with `errors.As`) where the caller needs
+  data out of the failure. Opaque where nothing branches — the common case here,
+  because Reconcile's caller is controller-runtime and it does not branch. A
+  sentinel or a type a caller can match on is API that has to keep working.
+- **`%w` publishes the error it wraps.** A caller reaches through it with
+  `errors.Is` and `errors.As`, so replacing what is inside breaks that caller
+  later. Wrap with `%w` where a caller is meant to reach the wrapped error —
+  `apierrors.IsNotFound` matches through a wrap, by `errors.As` on `APIStatus`
+  (`k8s.io/apimachinery/pkg/api/errors/errors.go:818`) — with `%v` where it is
+  not, and `errors.Join` where the caller needs all of several.
+- **Add context at a boundary** — an API call, an external request, a parse —
+  not on every line: `fmt.Errorf("fetch agent config: %w", err)`.
+- **Do not log and return the same error.** Reconcile returns it and the manager
+  logs it once, with the controller name, the object, and the reconcile ID
+  attached. A line written on the way up prints the same failure a second time
+  without those fields.
 - A panic in a reconciler takes down the manager. Parse and check rather than
   asserting.
 
