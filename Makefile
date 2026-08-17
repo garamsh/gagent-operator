@@ -114,6 +114,10 @@ lint: lint-coverage golangci-lint ## Run golangci-lint linter
 # Generated output is excluded because `exclusions.generated` filters its
 # findings by design. The two `--max-*` flags disable output truncation only:
 # the planted violations share one message, and the default keeps 3 of them.
+# The question is which files the config reaches, so only the linter carrying
+# the plant runs; a full analysis answers the same question and takes 17s
+# rather than 0.2s. Reach is the config's build tags, paths and exclusions —
+# all of which still apply — and not which linters the enable list holds.
 .PHONY: lint-coverage
 lint-coverage: golangci-lint ## Report the tracked Go files the linter reaches, and fail when one is unreachable.
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
@@ -122,7 +126,7 @@ lint-coverage: golangci-lint ## Report the tracked Go files the linter reaches, 
 	[ -n "$$expected" ] || { echo "lint coverage: no tracked Go file to probe" >&2; exit 1; }; \
 	git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$$tmp"; \
 	for f in $$expected; do printf '\n// lint coverage probe: recieve\n' >>"$$tmp/$$f"; done; \
-	( cd "$$tmp" && GOLANGCI_LINT_CACHE="$$tmp/cache" "$(GOLANGCI_LINT)" run --path-mode abs --max-same-issues=0 --max-issues-per-linter=0 >probe.out ) || true; \
+	( cd "$$tmp" && GOLANGCI_LINT_CACHE="$$tmp/cache" "$(GOLANGCI_LINT)" run --enable-only misspell --path-mode abs --max-same-issues=0 --max-issues-per-linter=0 >probe.out ) || true; \
 	reached=0; missing=; \
 	for f in $$expected; do \
 		if grep -qE "(^|/)$$f:[0-9]+:[0-9]+: .*\(misspell\)$$" "$$tmp/probe.out"; \
