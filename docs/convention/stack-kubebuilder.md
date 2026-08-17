@@ -150,6 +150,12 @@ Rules:
   error it requeues forever, and the only account of why the object is stuck
   sits in the manager's log rather than on the object the user can read. The fix
   is a spec edit, which wakes the controller on its own.
+- **A reference to something absent is not that case.** A spec naming a Secret
+  the user has yet to create fails the same way and reads the same on the
+  object, but creating that Secret is not a spec edit and wakes nothing — return
+  `nil` and the object stays stuck forever. Watch the referenced kind with
+  `Watches()` and map the event back to the owner. Once the arrival wakes the
+  controller, it is the case above and returns `nil` too.
 - **Owned objects carry an owner reference.** Set it with
   `controllerutil.SetControllerReference` and watch the kind with `Owns()`, so
   deletion cascades and changes wake the owner.
