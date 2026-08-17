@@ -276,13 +276,7 @@ Within `internal/<domain>/`:
 ### Generated mocks
 
 Where the project generates mocks, generate them with
-**[mockery v3](https://vektra.github.io/mockery/)**, built with a
-toolchain at least the module's `go` directive. `go install …@latest`
-ignores the current module's `go.mod` and takes the toolchain from
-mockery's own — v3.7.3 declares `go 1.25.5` — so a module on a newer
-Go gets a binary that refuses to load it, and the failure is fatal at
-package-load time. `GOTOOLCHAIN` set to the module's version builds
-one that reads it.
+**[mockery v3](https://vektra.github.io/mockery/)**.
 
 - **Config:** `.mockery.yml` at the module root — or `.mockery.yaml`,
   which mockery reads equally. One or the other, not both. It declares
@@ -339,6 +333,15 @@ to report prints it itself, before invoking `go test`.
 | Lint (if configured) | `golangci-lint run` |
 | Coverage | `go test -cover ./...` |
 | Generate (mockery) | `mockery` (config) or `go generate ./...` |
+
+Every tool the module invokes is built with a toolchain at least the
+module's `go` directive. `go install tool@version` and `go run
+tool@version` take the toolchain from the tool's own `go.mod`, not from
+this module — mockery 3.7.3 declares `go 1.25.5` — so a tool whose
+directive is older yields a binary that refuses to load the module's
+packages, fatally and at package-load time. Set that floor once for the
+module rather than per tool: `GOTOOLCHAIN` with an `+auto` suffix sets a
+minimum without stopping a tool that needs more.
 
 A task runner (Taskfile, Mage, Make) wraps these under the entry-point
 names; the underlying go commands stay the same.
