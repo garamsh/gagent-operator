@@ -1,6 +1,9 @@
 # Build the manager binary
 # Digest resolved from the tag on 2026-08-17. It is the multi-platform index, not one
 # platform's manifest, so TARGETARCH below still selects the base.
+# `kubebuilder alpha update` is the only mover: a newer scaffold's tag conflicts on this
+# line and is settled by rewriting tag and digest together, so a rebuild under the same
+# tag reaches nothing here.
 FROM golang:1.26@sha256:0d1d3a794be25f809dd2cb3160d8c73276c4056a9f8242a138e908ddeee7b6b6 AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -27,6 +30,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 # Digest resolved from the tag on 2026-08-17. It is the multi-platform index, not one
 # platform's manifest, so the build's target platform still selects the base.
+# Nothing moves it: the tag carries no version, so a newer scaffold leaves this line
+# alone, and a rebuild under `nonroot` arrives only when someone re-resolves the digest
+# by hand.
 FROM gcr.io/distroless/static:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6
 WORKDIR /
 COPY --from=builder /workspace/manager .
