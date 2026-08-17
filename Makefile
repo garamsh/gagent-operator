@@ -230,8 +230,13 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 deploy: manifests kustomize image-overlay ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	"$(KUSTOMIZE)" build $(IMAGE_OVERLAY) | "$(KUBECTL)" apply -f -
 
+# A second `make undeploy` meets the objects the first one deleted, so absence is
+# not a failure here. Only NotFound is ignored, so a delete the cluster refuses
+# still fails the target; a run that finds part of the set already gone also exits
+# 0, and its output names what it deleted rather than what was missing.
 .PHONY: undeploy
-undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
+undeploy: ignore-not-found = true
+undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=false to fail when an object is already absent.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
