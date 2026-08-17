@@ -82,8 +82,9 @@ var _ = Describe("Agent workload", func() {
 		Expect(err).NotTo(HaveOccurred())
 		created := statefulSetFor(name).ResourceVersion
 
-		agent.Spec.Image = "example.com/gagent:v0.2.0"
-		Expect(k8sClient.Update(ctx, agent)).To(Succeed())
+		edited := readAgent(name)
+		edited.Spec.Image = "example.com/gagent:v0.2.0"
+		Expect(k8sClient.Update(ctx, edited)).To(Succeed())
 
 		_, err = reconcileAgent(name)
 		Expect(err).NotTo(HaveOccurred())
@@ -102,8 +103,9 @@ var _ = Describe("Agent workload", func() {
 		_, err := reconcileAgent(name)
 		Expect(err).NotTo(HaveOccurred())
 
-		agent.Spec.StorageSize = resource.MustParse("2Gi")
-		Expect(k8sClient.Update(ctx, agent)).To(Succeed())
+		edited := readAgent(name)
+		edited.Spec.StorageSize = resource.MustParse("2Gi")
+		Expect(k8sClient.Update(ctx, edited)).To(Succeed())
 
 		_, err = reconcileAgent(name)
 		Expect(err).NotTo(HaveOccurred())
