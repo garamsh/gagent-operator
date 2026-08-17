@@ -55,7 +55,10 @@ as licence for a new `utils` elsewhere.
 - `config/` — kustomize bases and overlays. Partly generated (§2), partly
   hand-edited.
 - `test/e2e/` — end-to-end tests, run against a real cluster.
-- `dist/` — `make build-installer` output. Ignored, never committed.
+- `dist/` — what the entry points build rather than what a contributor writes:
+  the installer manifest and the kustomize overlay carrying `IMG`. Ignored,
+  never committed, and rebuilt from scratch, so a target may write here rather
+  than editing a tracked manifest.
 
 A reconciler that outgrows one file splits by responsibility
 (`agent_controller.go`, `agent_pod.go`, `agent_status.go`), not by layer.
