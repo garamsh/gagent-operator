@@ -24,9 +24,20 @@ const (
 	credentialsMountPath = "/etc/gagent/credentials"
 	stateMountPath       = "/var/lib/gagent"
 
-	// credentialsFileMode keeps the mounted credential files readable by their
-	// owner alone.
-	credentialsFileMode = 0o400
+	// credentialsFileMode keeps the mounted credential files readable by the
+	// group the Pod carries and by nothing else. A Secret volume's files are
+	// owned by root, so owner-only would leave them unreadable to an agent that
+	// drops root — which is what an agent image should do. Tightening it back to
+	// owner-only would not survive the kubelet anyway: where a Pod carries a
+	// group, it ORs group-read into every file it writes into the volume.
+	credentialsFileMode = 0o440
+
+	// agentFSGroup is the group the kubelet gives every volume in the Pod and
+	// adds to the supplementary groups of every process in it. It is not the uid
+	// the image runs as and does not have to match it: a group is what carries
+	// the access, so the operator never has to know which user the agent image
+	// chose.
+	agentFSGroup = 65532
 )
 
 // reconcileStatefulSet brings the StatefulSet an Agent describes into being, or
@@ -81,6 +92,11 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, sch
 	// The agent's state is a single-writer store, so a second replica is never
 	// correct.
 	statefulSet.Spec.Replicas = ptr.To[int32](1)
+
+	if statefulSet.Spec.Template.Spec.SecurityContext == nil {
+		statefulSet.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	statefulSet.Spec.Template.Spec.SecurityContext.FSGroup = ptr.To[int64](agentFSGroup)
 
 	statefulSet.Spec.Template.Spec.Volumes = []corev1.Volume{{
 		Name: credentialsVolumeName,

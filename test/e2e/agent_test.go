@@ -30,6 +30,7 @@ const (
 	credentialsToken = "e2e-token-6f1c9a"
 
 	credentialsMountPath = "/etc/gagent/credentials"
+	stateMountPath       = "/var/lib/gagent"
 )
 
 // agentManifest is the Agent under test. Its image is loaded onto the node by
@@ -129,6 +130,14 @@ var _ = Describe("Agent workload", Ordered, func() {
 	It("mounts the credentials as files at the mode asked for, and nowhere in the environment", func() {
 		waitForAgentPod()
 
+		// Everything below is about an agent that dropped root. Read as root, a
+		// credential file is readable whatever mode it carries, so this is the
+		// line that makes the rest of the spec mean anything.
+		By("checking the container is not running as root")
+		uid, err := execInAgent("id", "-u")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(uid)).NotTo(Equal("0"))
+
 		By("reading the mode the StatefulSet asks for")
 		asked, err := kubectlIn("get", "statefulset", agentUnderTest,
 			"-o", "jsonpath={.spec.template.spec.volumes[?(@.name=='credentials')].secret.defaultMode}")
@@ -158,6 +167,24 @@ var _ = Describe("Agent workload", Ordered, func() {
 		Expect(environment).To(ContainSubstring("HOSTNAME=" + agentPod))
 		Expect(environment).NotTo(ContainSubstring(credentialsToken))
 		Expect(environment).NotTo(ContainSubstring("token="))
+	})
+
+	It("gives the agent a state volume it can write to as that user", func() {
+		waitForAgentPod()
+
+		// Whether this needs the Pod's group depends on the provisioner. Kind's
+		// local-path creates the directory world-writable, so this passes with or
+		// without one here — measured, not assumed. What it does show is that the
+		// agent can write the volume it was given as the user it runs as, which
+		// no layer below this one can say at all.
+		By("writing a file to the state volume and reading it back")
+		written, err := execInAgent("sh", "-c",
+			"echo written-by-$(id -u) > "+stateMountPath+"/probe && cat "+stateMountPath+"/probe")
+		Expect(err).NotTo(HaveOccurred(), "the agent cannot write to its state volume")
+
+		uid, err := execInAgent("id", "-u")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(written)).To(Equal("written-by-" + strings.TrimSpace(uid)))
 	})
 
 	It("removes the StatefulSet and its Pod when the Agent is deleted", func() {

@@ -24,17 +24,20 @@ var (
 
 // The Agent under test runs an image that is not the agent, because no gagent
 // image exists to run. What the suite needs of it is an entrypoint that stays up
-// without being given a command — the operator sets none — and a shell that can
-// read the mounted credentials.
+// without being given a command — the operator sets none — a shell that can read
+// the mounted credentials, and a uid that is not root. The last one is not a
+// detail: an image that keeps root reads a root-owned credential file whatever
+// mode it carries, which is how #31 stayed invisible through every layer.
 const (
 	// agentImageSource is pinned by digest, so the bytes cannot change under the
-	// tag.
-	agentImageSource = "nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"
+	// tag. This one runs as uid 101.
+	agentImageSource = "nginxinc/nginx-unprivileged@sha256:" +
+		"0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6"
 
 	// agentImage is the reference the Agent under test carries. It resolves in no
 	// registry: the suite puts this image on the node, and a Pod that reaches for
 	// a registry instead fails rather than quietly running some other nginx.
-	agentImage = "gagent-e2e-agent:nginx-1.29-alpine"
+	agentImage = "gagent-e2e-agent:nginx-unprivileged-1.29-alpine"
 )
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
