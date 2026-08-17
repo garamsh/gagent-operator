@@ -143,6 +143,19 @@ Rules:
   swallowing an error to keep the queue quiet hides a stuck object.
 - **A missing object is not an error.** `apierrors.IsNotFound(err)` returns
   `ctrl.Result{}, nil` — the object is gone and there is nothing to reconcile.
+- **Neither is a failure that retrying cannot fix.** A spec the API server
+  accepted but this controller cannot act on — an image reference that does not
+  parse, a field naming a kind this controller does not support — returns
+  `ctrl.Result{}, nil` with the reason on a status condition. Returned as an
+  error it requeues forever, and the only account of why the object is stuck
+  sits in the manager's log rather than on the object the user can read. The fix
+  is a spec edit, which wakes the controller on its own.
+- **A reference to something absent is not that case.** A spec naming a Secret
+  the user has yet to create fails the same way and reads the same on the
+  object, but creating that Secret is not a spec edit and wakes nothing — return
+  `nil` and the object stays stuck forever. Watch the referenced kind with
+  `Watches()` and map the event back to the owner. Once the arrival wakes the
+  controller, it is the case above and returns `nil` too.
 - **Owned objects carry an owner reference.** Set it with
   `controllerutil.SetControllerReference` and watch the kind with `Owns()`, so
   deletion cascades and changes wake the owner.
@@ -188,13 +201,38 @@ Rules:
 
 ## 7. Error handling
 
-- Errors are values. Wrap with `fmt.Errorf("op: %w", err)` at boundaries — an
-  API call, an external request, a parse — not on every line.
-- Sentinels are declared where the concept lives and compared with `errors.Is`.
-- Do not log and return the same error. Reconcile returns it; controller-runtime
-  logs and requeues.
-- A panic in a reconciler takes down the manager. Parse and check rather than
-  asserting.
+- **An adapter translates before it returns.** The client that talks to an
+  external API turns that library's error into one this module declares; the
+  library's error type does not leave the file that imports the library. What an
+  implementation returns is part of the interface it satisfies, so one that
+  leaks its library's errors is not one a fake can stand in for.
+- **Sentinel, typed, or opaque — what the caller does decides which.** A
+  sentinel (`var ErrX = errors.New(...)`, read with `errors.Is`) where the
+  caller branches on which failure and the failure carries no data. A typed
+  error (a struct with `Error()`, read with `errors.As`) where the caller needs
+  data out of the failure. Opaque where nothing branches — the common case here,
+  because Reconcile's caller is controller-runtime and it does not branch. A
+  sentinel or a type a caller can match on is API that has to keep working.
+- **`%w` publishes the error it wraps.** A caller reaches through it with
+  `errors.Is` and `errors.As`, so replacing what is inside breaks that caller
+  later. Wrap with `%w` where a caller is meant to reach the wrapped error —
+  `apierrors.IsNotFound` matches through a wrap, by `errors.As` on `APIStatus`
+  (`k8s.io/apimachinery/pkg/api/errors/errors.go:818`) — with `%v` where it is
+  not, and `errors.Join` where the caller needs all of several.
+- **Add context at a boundary** — an API call, an external request, a parse —
+  not on every line: `fmt.Errorf("fetch agent config: %w", err)`.
+- **Do not log and return the same error.** Reconcile returns it and the manager
+  logs it once, with the controller name, the object, and the reconcile ID
+  attached. A line written on the way up prints the same failure a second time
+  without those fields.
+- **A recovered panic is indistinguishable from a transient failure.**
+  controller-runtime recovers a panic in Reconcile unless `RecoverPanic` is set
+  to false: it defaults to true
+  (`sigs.k8s.io/controller-runtime/pkg/config/controller.go:56`) and the panic
+  becomes `fmt.Errorf("panic: %v [recovered]", r)`
+  (`pkg/internal/controller/controller.go:203`) — an ordinary returned error,
+  which §4 then governs. A nil-map write therefore loops instead of crashing,
+  and reads like a network blip. Parse and check rather than asserting.
 
 ## 8. Logging
 
@@ -208,7 +246,8 @@ Rules:
 - **Structured key-value pairs, balanced.** `logcheck` is enabled in
   `.golangci.yml` and fails an odd argument list.
 - Levels: `Info` for state changes a user would want to see, `Error` for a
-  failure being returned, `V(1)` and deeper for per-reconcile detail.
+  failure this code handles instead of returning — the manager logs a returned
+  error itself (§7) — `V(1)` and deeper for per-reconcile detail.
 - **Never log secrets** — token values, key material, or a whole object that
   may carry them. Log the reference, not the content.
 - The reconcile path is hot. A log line per reconcile per object is a cost;
