@@ -34,7 +34,10 @@ These apply only when the project uses that stack.
 
 | File | Governs |
 |---|---|
+| `stack-container.md` | What an OCI image the project builds is made of — bases, build secrets, what an image may carry |
 | `stack-kubebuilder.md` | Go operators scaffolded by kubebuilder: layout, API types, controllers, markers, logging, tests |
+
+`Dockerfile` is named by both, and the split is here: `stack-kubebuilder.md` decides where it sits and that the scaffold owns that path, `stack-container.md` decides what goes inside it.
 
 A stack file states the concrete form of what a stack-neutral file governs: the test runner and file placement behind `testing.md`, the comment syntax behind `code-comments.md`, the commands behind an entry-point name in `ci.md`. It never restates the rule itself. This table is where that split is recorded — the files do not point at each other.
 
