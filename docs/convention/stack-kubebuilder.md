@@ -19,7 +19,7 @@
 - 5. Markers
 - 6. Naming
 - 7. Error handling
-- 8. Logging
+- 8. Logging and metrics
 - 9. Comments and docs
 - 10. Testing
 - 11. Imports and dependencies
@@ -213,7 +213,7 @@ Rules:
   which §4 then governs. A nil-map write therefore loops instead of crashing,
   and reads like a network blip. Parse and check rather than asserting.
 
-## 8. Logging
+## 8. Logging and metrics
 
 - **Use the logger from the context**: the scaffold imports
   `logf "sigs.k8s.io/controller-runtime/pkg/log"` and calls `logf.FromContext(ctx)`.
@@ -229,6 +229,13 @@ Rules:
   error itself (§7) — `V(1)` and deeper for per-reconcile detail.
 - The reconcile path is hot. A log line per reconcile per object is a cost;
   log transitions, not steady state.
+- **controller-runtime owns the registry; do not make one.** A collector is
+  registered into `metrics.Registry`
+  (`sigs.k8s.io/controller-runtime/pkg/metrics/registry.go:30`), because that is
+  the only registry the manager's `/metrics` serves
+  (`pkg/metrics/server/server.go:221`). Registering into a registry of your own
+  succeeds and exports nothing — the metric exists, the code looks right, and
+  the endpoint never shows it.
 
 ## 9. Comments and docs
 
