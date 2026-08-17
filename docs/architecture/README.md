@@ -32,3 +32,4 @@ Current architecture of the system and the decisions behind it. This file is the
 | `adr/0003-single-stack-convention-file.md` | Govern Go with one stack file written for the operator | superseded by ADR-0004 |
 | `adr/0004-extend-stack-go.md` | Extend `stack-go.md` instead of replacing it | accepted |
 | `adr/0005-statefulset-of-one.md` | Run an agent as a StatefulSet of one replica | accepted |
+| `adr/0006-credential-group.md` | Carry credential access on a group, not on a user | accepted |
