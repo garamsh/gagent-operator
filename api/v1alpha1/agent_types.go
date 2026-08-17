@@ -41,13 +41,13 @@ type AgentSpec struct {
 
 // AgentStatus defines the observed state of Agent.
 type AgentStatus struct {
-	// conditions represent the current state of the Agent resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
+	// conditions report what the controller observed of this Agent. One type is
+	// set:
 	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
+	// - "Synced": True when the cluster carries the workload this Agent's spec
+	//   asks for. False when the Secret named by credentialsSecretName does not
+	//   exist, and False when the spec was edited in a way the running workload
+	//   cannot take. The reason says which.
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -62,8 +62,29 @@ type AgentStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
+// ConditionSynced is the condition type reporting whether the cluster carries
+// the workload an Agent's spec asks for.
+const ConditionSynced = "Synced"
+
+// Reasons for the Synced condition.
+const (
+	// ReasonWorkloadReconciled is set when the workload matches the spec.
+	ReasonWorkloadReconciled = "WorkloadReconciled"
+
+	// ReasonCredentialsSecretMissing is set when the Secret the spec names does
+	// not exist, which leaves the workload unbuilt.
+	ReasonCredentialsSecretMissing = "CredentialsSecretMissing"
+
+	// ReasonStorageSizeImmutable is set when the spec asks for a volume size the
+	// workload cannot be changed to.
+	ReasonStorageSizeImmutable = "StorageSizeImmutable"
+)
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Synced",type=string,JSONPath=`.status.conditions[?(@.type=="Synced")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Synced")].reason`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Agent is the Schema for the agents API
 type Agent struct {

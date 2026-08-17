@@ -26,10 +26,12 @@ type AgentReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=agent.garam.sh,resources=agents,verbs=get;list;watch
+// +kubebuilder:rbac:groups=agent.garam.sh,resources=agents/status,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
-// Reconcile drives the workload an Agent describes toward the Agent's spec.
+// Reconcile drives the workload an Agent describes toward the Agent's spec, and
+// reports on the Agent what it observed.
 func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var agent agentv1alpha1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &agent); err != nil {
@@ -40,24 +42,57 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, fmt.Errorf("get agent: %w", err)
 	}
 
+	held := *agent.Status.DeepCopy()
+
+	if err := r.reconcileWorkload(ctx, &agent); err != nil {
+		return ctrl.Result{}, err
+	}
+	agent.Status.ObservedGeneration = agent.Generation
+
+	if err := r.writeStatus(ctx, &agent, held); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// reconcileWorkload brings the workload the Agent describes to what its spec
+// asks for, and records the outcome on the Agent's conditions. It returns an
+// error only where retrying can fix the failure: a spec this controller cannot
+// act on is a condition, because requeueing it would never end and the object
+// would say nothing about why.
+func (r *AgentReconciler) reconcileWorkload(ctx context.Context, agent *agentv1alpha1.Agent) error {
 	credentials := client.ObjectKey{Namespace: agent.Namespace, Name: agent.Spec.CredentialsSecretName}
 	if err := r.credentialsExist(ctx, credentials); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Creating the Secret is not a spec edit and wakes nothing on its
 			// own; the watch on Secrets is what brings this Agent back.
-			logf.FromContext(ctx).Info("Waiting for the credentials Secret", "secret", credentials.Name)
+			setSynced(agent, metav1.ConditionFalse, agentv1alpha1.ReasonCredentialsSecretMissing,
+				fmt.Sprintf("Secret %q does not exist, and the workload is not built until it does", credentials.Name))
 
-			return ctrl.Result{}, nil
+			return nil
 		}
 
-		return ctrl.Result{}, fmt.Errorf("get credentials secret: %w", err)
+		return fmt.Errorf("get credentials secret: %w", err)
 	}
 
-	if err := r.reconcileStatefulSet(ctx, &agent); err != nil {
-		return ctrl.Result{}, err
+	statefulSet, err := r.reconcileStatefulSet(ctx, agent)
+	if err != nil {
+		return err
 	}
 
-	return ctrl.Result{}, nil
+	if claimed := claimedStorageSize(statefulSet); claimed.Cmp(agent.Spec.StorageSize) != 0 {
+		setSynced(agent, metav1.ConditionFalse, agentv1alpha1.ReasonStorageSizeImmutable,
+			fmt.Sprintf("The volume was claimed at %s and spec.storageSize now asks for %s, which a StatefulSet's claim template cannot be changed to",
+				claimed.String(), agent.Spec.StorageSize.String()))
+
+		return nil
+	}
+
+	setSynced(agent, metav1.ConditionTrue, agentv1alpha1.ReasonWorkloadReconciled,
+		fmt.Sprintf("StatefulSet %q carries what this Agent's spec asks for", statefulSet.Name))
+
+	return nil
 }
 
 // credentialsExist reads the metadata of the Secret an Agent names, and nothing

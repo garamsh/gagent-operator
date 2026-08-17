@@ -11,7 +11,9 @@ The `agent.garam.sh` API group, the `Agent` kind it serves, and the controller t
 - The workload is a StatefulSet of one replica with a volume claim template for the agent's volume.
 - An Agent whose credentials Secret is absent gets no workload at all, and the Secret's arrival is what builds it. Mounting a Secret that does not exist leaves the Pod unable to start, and creating that Secret is not an edit to the Agent, so the controller watches the Secret rather than waiting to be woken by a spec change.
 - `v1alpha1` makes no outbound call. Nothing here reads a source outside the cluster, and no field names one: an identifier for an external API waits until something fills it.
-- The reconciler owns the StatefulSet through an owner reference and holds no finalizer: deleting the Agent is what removes the workload. It writes no status.
+- The reconciler owns the StatefulSet through an owner reference and holds no finalizer: deleting the Agent is what removes the workload.
+- An Agent reports one condition, `Synced`: whether the cluster carries the workload the spec asks for, and the reason where it does not. `status.observedGeneration` says which generation that answer was computed from, so a status the controller has not caught up with is visible as one. A spec this controller cannot act on is reported there rather than returned as an error, because an error would requeue forever and say nothing on the object.
+- The object reports nothing about whether the agent is running. The controller does not read the workload's health, and a condition claiming readiness it has not observed would be worth less than none.
 
 ## Rationale
 
@@ -21,12 +23,13 @@ The workload's form is [ADR 0005](adr/0005-statefulset-of-one.md): a StatefulSet
 
 The image field and the absence of outbound calls were settled on issue #11, before the API was written. Neither carries an ADR: the image rule is stated in the field's own doc comment, where it is enforced, and "no outbound call in `v1alpha1`" is a milestone boundary rather than a project rule.
 
+The condition this API reports was settled on issue #14, and carries no ADR for the same kind of reason: its type and its reasons are constants in `api/v1alpha1`, and the field's own doc comment names them where a user of the API reads them.
+
 ## Open questions
 
-- **Status writing and condition semantics.** Nothing the controller learns reaches the object: an Agent waiting for its Secret, and one whose storage size the workload cannot follow, both read as an Agent with an empty status.
 - **The `garam` integration, in both shape and timing.** Which side is the source of truth for the set of agents was answered twice on 2026-08-17, in opposite directions. The first answer — this operator decides and tells `garam` afterwards — described `garam` as it stood that morning and was recorded here. It was superseded the same day: `garam`'s console defines agents, chooses which operator builds each one and with what values, and this operator reads that. The direction is `garam` to operator, and the shape of the surface that carries it — its path, its authentication, whether it is polled or watched, and what key matches an operator to its agents — is undecided at `garam`. A configuration payload will exist there, which the earlier answer also denied.
 
   What holds across both answers: `garam` never dials inward, an agent's identifier is minted by `garam` and is not known when a CR is created, the per-agent client certificate is issued by `garam` and placed by this operator, and there is no surface for reporting state back.
 
   Nothing in `v1alpha1` moved when the answer reversed, because no field here names an external system and no code calls one. That was the milestone boundary's purpose and this is the event it was drawn for.
-- **Resizing an agent's volume.** A StatefulSet's claim template is immutable after creation, so a change to `spec.storageSize` on an existing `Agent` cannot be satisfied by editing the workload. ADR 0005 accepts the limitation without answering it, and the controller leaves the claim as it is rather than failing.
+- **Resizing an agent's volume.** A StatefulSet's claim template is immutable after creation, so a change to `spec.storageSize` on an existing `Agent` cannot be satisfied by editing the workload. ADR 0005 accepts the limitation without answering it. The controller leaves the claim as it is and says so on the object, which makes the limitation visible without answering it either.

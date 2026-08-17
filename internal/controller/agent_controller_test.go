@@ -83,6 +83,19 @@ func reconcileAgent(name string) (reconcile.Result, error) {
 	})
 }
 
+// readAgent reads an Agent back as the API server now holds it. A reconcile
+// writes the Agent's status, so a copy taken before one is stale and an update
+// through it is refused.
+func readAgent(name string) *agentv1alpha1.Agent {
+	GinkgoHelper()
+
+	agent := &agentv1alpha1.Agent{}
+	key := types.NamespacedName{Name: name, Namespace: agentNamespace}
+	Expect(k8sClient.Get(ctx, key, agent)).To(Succeed())
+
+	return agent
+}
+
 // statefulSetFor reads back the StatefulSet an Agent of that name owns.
 func statefulSetFor(name string) *appsv1.StatefulSet {
 	GinkgoHelper()

@@ -12,7 +12,7 @@ Two things it is not: it is not the agent, which lives in a separate repository,
 
 ## Status
 
-The controller builds an Agent's workload and reports nothing back. `api/v1alpha1/` holds the `Agent` types and `config/crd/bases/` the CRD they generate; `internal/controller/` reconciles an `Agent` into a StatefulSet it owns. An `Agent`'s `status` stays empty whatever happens to that workload.
+The controller builds an Agent's workload and reports what it observed. `api/v1alpha1/` holds the `Agent` types and `config/crd/bases/` the CRD they generate; `internal/controller/` reconciles an `Agent` into a StatefulSet it owns and records the outcome on the Agent's `Synced` condition, which `kubectl get agents` prints. Nothing here calls `garam`.
 
 ## Requirements
 
