@@ -180,6 +180,12 @@ Rules:
   `+kubebuilder:printcolumn` on the type for `kubectl get` output. Cross-field
   constraints belong here too, not in Reconcile: `ExactlyOneOf`, `AtLeastOneOf`,
   `AtMostOneOf`, `+k8s:immutable`, and CEL through `+kubebuilder:validation:XValidation`.
+- **A field with no schema node of its own takes the marker on the type, and the
+  message names the field.** `metadata` is the case: the CRD carries no schema
+  for it to constrain, and `fieldPath` pointing into it makes the API server
+  reject the CRD outright. A rule on the type reaching `self.metadata.name` is
+  the only placement available, so the message has to say which field it is
+  about — nothing else in the refusal will.
 - A marker's effect is verified by reading the regenerated file, not by
   assuming the marker parsed.
 
