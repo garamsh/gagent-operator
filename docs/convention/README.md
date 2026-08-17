@@ -3,10 +3,18 @@
 Rules every agent follows when writing code, tests, commits, and documents. The PM owns these files; workers read and apply them.
 
 ## Contents
+- Scope
 - Stack-neutral
 - Stack-specific
+- Architecture
 - Independence
 - Precedence
+
+## Scope
+
+These rules bind what the project writes. A committed file a generator produced is not that — the project owns the input and the decision to commit it, not the output's internals — and neither is a comment a tool writes into, which is an interface rather than prose.
+
+What makes a file generated is that regenerating it changes nothing. One nobody can regenerate is authored, whatever its header says.
 
 ## Stack-neutral
 
@@ -22,11 +30,9 @@ Rules every agent follows when writing code, tests, commits, and documents. The 
 | `review.md` | What a review must carry to be valid, and how an author responds |
 | `documentation.md` | What makes a document or a GitHub artifact valid, review comments included |
 
-Every project keeps all of these. They are the floor, and bootstrap prunes only the table below.
+Every project keeps all of these. They are the floor, and bootstrap prunes only the tables below.
 
-Selection is not once. A project that changes its stack or its structure takes the file that now matches and drops the one that no longer does, in the pull request that makes the change.
-
-This project has no architecture file. Its shape is fixed by the kubebuilder scaffold — an entry point, an API package, and a controller package — rather than partitioned into boundaries a document would have to describe, so no `arch-*.md` applies.
+Selection is not once. A change that alters the project's stack or its structure carries the selection with it — the file that now matches added, the one that no longer does dropped, in the same pull request. A worker whose change triggers a selection does not make it.
 
 ## Stack-specific
 
@@ -45,6 +51,10 @@ A stack file states the concrete form of what a stack-neutral file governs: the 
 A stack built on another stack takes a row with a base in the Extends column. The derived file holds only the rules its stack changes — one rule, not the section around it — and the base governs every rule it does not, so a project keeping the derived file keeps the base too. A base has no base of its own: one level, so that opening two files is always enough.
 
 Silence in the derived file is not evidence that a base rule survives. A derived stack can defeat a base rule without contradicting it — the base says define the metrics registry once, the derived framework serves only a registry it made itself, and registering in the one the base named succeeds and appears nowhere. So the base is read in full when the row is added, and each later change to a base rule is read against every file extending it.
+
+## Architecture
+
+The shape the system is partitioned into. This project has none: its shape is fixed by the kubebuilder scaffold — an entry point, an API package, and a controller package — rather than partitioned into boundaries a document would have to describe, so no `arch-*.md` applies and the table is empty.
 
 ## Independence
 
