@@ -38,8 +38,7 @@ See §0 for the banned-name list.
 
 ### Layout A — small service (default)
 
-- `cmd/<binary>/main.go` — thin entry point; constructs concrete
-  types.
+- `cmd/<binary>/main.go` — the binary's entry point.
 - `internal/<domain>/<domain>.go` — the aggregate: domain types, DTOs
   and sentinel errors (`User`, `CreateUserInput`, `ErrUserNotFound`).
 - `internal/<domain>/service.go` — the contract: `type Service
@@ -69,10 +68,9 @@ See §0 for the banned-name list.
 **Single file vs package** for an impl:
 
 - **Single file** (`postgres.go`, `memory.go`) when impl ≤ ~300 LoC
-  and has no private helpers worth isolating. Filename = vendor.
+  and has no private helpers worth isolating.
 - **Package** (`postgres/`, `memory/`) when impl > ~300 LoC or owns
-  private helpers / connection-pool / per-SQL constants. Folder name
-  = vendor.
+  private helpers / connection-pool / per-SQL constants.
 
 ### Layout B — domain-rich service (5k–30k LoC)
 
@@ -257,7 +255,9 @@ project says otherwise).
   unit under test through its exported API. **Default to this.**
 - **Internal tests** (`package user`): same directory and package as
   the code under test. Use only when you genuinely need a white-box
-  seam (uncommon).
+  seam (uncommon), or when the package cannot be imported — `package
+  main` cannot, so a test of one is internal by necessity rather than
+  by choice.
 - **`tests/` at module root:** integration / E2E tests that wire
   multiple domains. Separate binary.
 - **In-process integration test client:** `httptest.NewServer`.
@@ -273,9 +273,10 @@ Within `internal/<domain>/`:
 - Test names: `TestFunctionName` or `TestFunctionName_Scenario`.
 - Benchmarks: `func BenchmarkXxx(b *testing.B)`.
 
-### Mocks with mockery
+### Generated mocks
 
-Use **[mockery v3](https://vektra.github.io/mockery/)**.
+Where the project generates mocks, generate them with
+**[mockery v3](https://vektra.github.io/mockery/)**.
 
 - **Config:** `.mockery.yml` at the module root — or `.mockery.yaml`,
   which mockery reads equally. One or the other, not both. It declares

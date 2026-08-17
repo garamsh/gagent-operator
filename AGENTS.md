@@ -33,6 +33,12 @@ An objection is a reason to re-examine a decision, not a reason to change it. Re
 
 A position that moves without a stated reason leaves the next reader nothing to check, so the same ground is argued again later. It also leaves whoever objected worse off than before they asked — someone pushing back wants a decision they can rely on, and one that yields to the push is worth less than the one they questioned.
 
+## What earns a rule
+
+A proposal for a new rule is examined the same way, and what earns one is a decision that divided for lack of it, met in more than one project — or in one, where the divergence is the tool's rather than the project's, since anyone running that tool meets the same one.
+
+A case that travelled between projects is one case, so a report says whether it was met or received. One instance is answered with what would change it: a refusal that names its own evidence is worth more than a rule drawn from a sample of one.
+
 ## Why the pull request asks what you read
 
 The template asks which convention files you opened, and a reviewer checks that answer against the diff. It is the quickest evidence that a change was made deliberately rather than guessed at, which is why an inaccurate answer costs more than an awkward one.
