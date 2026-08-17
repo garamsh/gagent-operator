@@ -4,6 +4,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -15,6 +18,11 @@ import (
 
 const agentNamespace = "default"
 
+// credentialsSecretName is the Secret the baseline Agent of that name expects.
+func credentialsSecretName(agent string) string {
+	return agent + "-credentials"
+}
+
 // newAgent returns an Agent the API server accepts, so that a spec differing
 // from it in one field isolates that field.
 func newAgent(name string) *agentv1alpha1.Agent {
@@ -25,10 +33,65 @@ func newAgent(name string) *agentv1alpha1.Agent {
 		},
 		Spec: agentv1alpha1.AgentSpec{
 			Image:                 "example.com/gagent:v0.1.0",
-			CredentialsSecretName: "agent-credentials",
+			CredentialsSecretName: credentialsSecretName(name),
 			StorageSize:           resource.MustParse("1Gi"),
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
+			},
 		},
 	}
+}
+
+// createSecret creates the credentials Secret an Agent names, and deletes it
+// when the spec ends.
+func createSecret(name string) {
+	GinkgoHelper()
+
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agentNamespace}}
+	Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+	DeferCleanup(func() {
+		Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+	})
+}
+
+// createAgent creates an Agent, and when the spec ends deletes it along with the
+// StatefulSet it owns: envtest runs no garbage collector, so an owned object
+// outlives its owner here.
+func createAgent(agent *agentv1alpha1.Agent) {
+	GinkgoHelper()
+
+	Expect(k8sClient.Create(ctx, agent)).To(Succeed())
+	DeferCleanup(func() {
+		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, agent))).To(Succeed())
+
+		workload := &appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: agent.Name, Namespace: agent.Namespace},
+		}
+		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, workload))).To(Succeed())
+	})
+}
+
+// reconcileAgent runs one reconcile for the named Agent.
+func reconcileAgent(name string) (reconcile.Result, error) {
+	reconciler := &AgentReconciler{
+		Client: k8sClient,
+		Scheme: k8sClient.Scheme(),
+	}
+
+	return reconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: agentNamespace},
+	})
+}
+
+// statefulSetFor reads back the StatefulSet an Agent of that name owns.
+func statefulSetFor(name string) *appsv1.StatefulSet {
+	GinkgoHelper()
+
+	workload := &appsv1.StatefulSet{}
+	key := types.NamespacedName{Name: name, Namespace: agentNamespace}
+	Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
+
+	return workload
 }
 
 var _ = Describe("Agent", func() {
@@ -44,7 +107,7 @@ var _ = Describe("Agent", func() {
 		readBack := &agentv1alpha1.Agent{}
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(accepted), readBack)).To(Succeed())
 		Expect(readBack.Spec.Image).To(Equal("example.com/gagent:v0.1.0"))
-		Expect(readBack.Spec.CredentialsSecretName).To(Equal("agent-credentials"))
+		Expect(readBack.Spec.CredentialsSecretName).To(Equal(credentialsSecretName("stores-its-spec")))
 		Expect(readBack.Spec.StorageSize.String()).To(Equal("1Gi"))
 
 		By("creating the same Agent with an empty image")
@@ -55,15 +118,48 @@ var _ = Describe("Agent", func() {
 	})
 
 	It("reconciles an Agent that is gone without returning an error", func() {
-		reconciler := &AgentReconciler{
-			Client: k8sClient,
-			Scheme: k8sClient.Scheme(),
-		}
-
-		result, err := reconciler.Reconcile(ctx, reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: "never-created", Namespace: agentNamespace},
-		})
+		result, err := reconcileAgent("never-created")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal(reconcile.Result{}))
+	})
+
+	It("builds nothing until the credentials Secret exists", func() {
+		name := "waits-for-credentials"
+		createAgent(newAgent(name))
+
+		By("reconciling while the Secret is absent")
+		result, err := reconcileAgent(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		key := types.NamespacedName{Name: name, Namespace: agentNamespace}
+		Expect(k8sClient.Get(ctx, key, &appsv1.StatefulSet{})).
+			To(MatchError(apierrors.IsNotFound, "a not-found error"))
+
+		By("reconciling once the Secret exists")
+		createSecret(credentialsSecretName(name))
+		_, err = reconcileAgent(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(statefulSetFor(name).Spec.Template.Spec.Containers).To(HaveLen(1))
+	})
+
+	It("wakes the Agents that name an arriving Secret, and no others", func() {
+		waiting := newAgent("names-the-secret")
+		createAgent(waiting)
+
+		other := newAgent("names-another-secret")
+		createAgent(other)
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      credentialsSecretName(waiting.Name),
+				Namespace: agentNamespace,
+			},
+		}
+
+		reconciler := &AgentReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		Expect(reconciler.agentsNamingSecret(ctx, secret)).To(ConsistOf(reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(waiting),
+		}))
 	})
 })
