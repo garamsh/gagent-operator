@@ -39,7 +39,13 @@ var _ = Describe("Agent workload", func() {
 		Expect(workload.Spec.Template.Spec.Volumes).To(HaveLen(1))
 		credentials := workload.Spec.Template.Spec.Volumes[0]
 		Expect(credentials.Secret.SecretName).To(Equal(agent.Spec.CredentialsSecretName))
-		Expect(credentials.Secret.DefaultMode).To(HaveValue(BeEquivalentTo(0o400)))
+		Expect(credentials.Secret.DefaultMode).To(HaveValue(BeEquivalentTo(0o440)))
+
+		// The mode is group-readable, so the group is what decides who reads it:
+		// the kubelet puts the volumes under this group and hands it to every
+		// process in the Pod, whatever uid the image runs as.
+		Expect(workload.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
+		Expect(workload.Spec.Template.Spec.SecurityContext.FSGroup).To(HaveValue(BeEquivalentTo(65532)))
 		Expect(container.VolumeMounts).To(ContainElement(corev1.VolumeMount{
 			Name:      credentials.Name,
 			MountPath: credentialsMountPath,
