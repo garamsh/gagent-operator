@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"fmt"
+	"strings"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -17,6 +20,12 @@ import (
 )
 
 const agentNamespace = "default"
+
+// agentNameLimit is the longest Agent name the CRD accepts, and the number the
+// marker on the type carries. The workload's Pods label themselves with the
+// Agent's name and a suffix of up to 11 characters, and a label value stops at
+// 63 bytes.
+const agentNameLimit = 52
 
 // credentialsSecretName is the Secret the baseline Agent of that name expects.
 func credentialsSecretName(agent string) string {
@@ -108,6 +117,21 @@ func statefulSetFor(name string) *appsv1.StatefulSet {
 }
 
 var _ = Describe("Agent", func() {
+	It("accepts a name as long as its workload's labels allow, and refuses one character more", func() {
+		By("creating an Agent whose name is exactly at the bound")
+		accepted := newAgent(strings.Repeat("a", agentNameLimit))
+		Expect(k8sClient.Create(ctx, accepted)).To(Succeed())
+		DeferCleanup(func() {
+			Expect(k8sClient.Delete(ctx, accepted)).To(Succeed())
+		})
+
+		By("creating one that differs from it by a single character of name")
+		rejected := newAgent(strings.Repeat("a", agentNameLimit+1))
+		err := k8sClient.Create(ctx, rejected)
+		Expect(err).To(MatchError(ContainSubstring(
+			fmt.Sprintf("metadata.name must be %d characters or fewer", agentNameLimit))))
+	})
+
 	It("stores the spec it was created with, and refuses an image the CRD cannot accept", func() {
 		By("creating an Agent the API server accepts")
 		accepted := newAgent("stores-its-spec")
