@@ -8,6 +8,8 @@ The `agent.garam.sh` API group, the `Agent` kind it serves, and the controller t
 - `AgentSpec` carries what an agent needs to run: the container image, the Secret its credential material comes from, the persistent volume it keeps state on, and the compute resources its container asks for. `AgentStatus` carries observed state only, and nothing a user writes.
 - The image reference is required and has no default. No registry or tag convention exists for the agent image and neither project owns one, so the field asks rather than invents; a default can be added later to a field that already exists.
 - Credential material is referenced, never carried. The Secret is created outside this operator, and the workload mounts its keys as files — key material does not travel through environment variables.
+- The Pod carries a supplementary group, and the credential files are readable by that group rather than by their owner alone. A Secret volume's files are owned by root, so an owner-only mode leaves them unreadable to an agent that drops root — and the operator cannot know which uid an agent image runs as. A group needs no such knowledge: the kubelet puts every volume of the Pod under it and hands it to every process in the Pod, whatever user each container runs as, and the same group is what lets the agent write its state volume.
+- What that gives up: any container of the Pod that mounts the credentials volume can read it, where an owner-only mode would have required it to run as root. The workload has one container, and which containers mount that volume is the operator's to decide.
 - The workload is a StatefulSet of one replica with a volume claim template for the agent's volume.
 - An Agent's name is bounded at 52 characters, and the API server is what refuses a longer one. The workload's Pods carry that name with a suffix in a label — the longest is the revision hash, up to 11 characters — and a label value stops at 63. A name the API server took and the workload could not use would leave the controller building a StatefulSet whose Pods the API server then refuses, with nothing to retry.
 - An Agent whose credentials Secret is absent gets no workload at all, and the Secret's arrival is what builds it. Mounting a Secret that does not exist leaves the Pod unable to start, and creating that Secret is not an edit to the Agent, so the controller watches the Secret rather than waiting to be woken by a spec change.
@@ -23,6 +25,8 @@ The layout and the generated manifests follow the scaffold, per [ADR 0001](adr/0
 The workload's form is [ADR 0005](adr/0005-statefulset-of-one.md): a StatefulSet of one replica, because the agent's state is a single-writer store and the ordering guarantee is the only thing keeping two writers off one volume.
 
 The image field and the absence of outbound calls were settled on issue #11, before the API was written. Neither carries an ADR: the image rule is stated in the field's own doc comment, where it is enforced, and "no outbound call in `v1alpha1`" is a milestone boundary rather than a project rule.
+
+The Pod's group and the group-readable mode were settled on issue #31, after the e2e layer measured what no layer below it could see: a container that drops root cannot read an owner-only file the kubelet wrote as root.
 
 The condition this API reports was settled on issue #14, and carries no ADR for the same kind of reason: its type and its reasons are constants in `api/v1alpha1`, and the field's own doc comment names them where a user of the API reads them.
 
