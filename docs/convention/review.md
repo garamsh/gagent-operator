@@ -72,7 +72,7 @@ When the PM and authors share one GitHub account, `comment` is the only review s
 A self-review reads the diff against the reviewer's own understanding of the rules — the understanding that produced the diff. It catches what the change contradicts on its face. It misses what the change contradicts in something the reviewer already believes, because reading the diff again does not re-examine the belief.
 
 - **The review says the author reviewed it**, in one line beside the decision. A reader cannot tell otherwise, and a review that hides it is asserting a second pair of eyes.
-- **The Depth row names what the shared authorship left unchecked**: a rule in a section the diff does not touch, a claim about a file it does not change, a fact taken from memory instead of run. `pass` with nothing beside it asserts a check this arrangement cannot make.
+- **What the shared authorship left unchecked is marked in the row that owns it.** A rule two sections away that the author already believed they knew is a Conventions row; a command whose output arrived after the claim was written is a Verification row. The work is finding them — `pass` asserted from the understanding that produced the diff is what this section exists to name.
 - Nothing else relaxes. Scope, Verification and Depth still read `pass` for an approve, and a `fail` in any row is still not one.
 
 ## Responding to a review (author)
