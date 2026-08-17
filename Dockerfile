@@ -1,5 +1,7 @@
 # Build the manager binary
-FROM golang:1.26 AS builder
+# Digest resolved from the tag on 2026-08-17. It is the multi-platform index, not one
+# platform's manifest, so TARGETARCH below still selects the base.
+FROM golang:1.26@sha256:0d1d3a794be25f809dd2cb3160d8c73276c4056a9f8242a138e908ddeee7b6b6 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -23,7 +25,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/static:nonroot
+# Digest resolved from the tag on 2026-08-17. It is the multi-platform index, not one
+# platform's manifest, so the build's target platform still selects the base.
+FROM gcr.io/distroless/static:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532
