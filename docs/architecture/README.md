@@ -31,3 +31,4 @@ Current architecture of the system and the decisions behind it. This file is the
 | `adr/0002-dev-integration-branch.md` | Integrate on `dev` and keep `main` for released state | accepted |
 | `adr/0003-single-stack-convention-file.md` | Govern Go with one stack file written for the operator | superseded by ADR-0004 |
 | `adr/0004-extend-stack-go.md` | Extend `stack-go.md` instead of replacing it | accepted |
+| `adr/0005-statefulset-of-one.md` | Run an agent as a StatefulSet of one replica | accepted |

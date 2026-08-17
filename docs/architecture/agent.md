@@ -16,9 +16,12 @@ The `agent.garam.sh` API group, the `Agent` kind it serves, and the controller t
 
 The layout and the generated manifests follow the scaffold, per [ADR 0001](adr/0001-kubebuilder-go-v4-scaffold.md): code is written to fit the CLI's paths rather than the CLI's output being reshaped to fit a preferred layout.
 
-The decisions above about the workload's form, the image field, and the absence of outbound calls were settled on issue #11, before the API was written.
+The workload's form is [ADR 0005](adr/0005-statefulset-of-one.md): a StatefulSet of one replica, because the agent's state is a single-writer store and the ordering guarantee is the only thing keeping two writers off one volume.
+
+The image field and the absence of outbound calls were settled on issue #11, before the API was written. Neither carries an ADR: the image rule is stated in the field's own doc comment, where it is enforced, and "no outbound call in `v1alpha1`" is a milestone boundary rather than a project rule.
 
 ## Open questions
 
 - Workload assembly, status writing, and condition semantics. The reconciler is a stub until each is decided.
-- The `garam` integration — the endpoint, the credential, and which side opens the connection — and therefore whether it reaches this API in `v1alpha1` or a later version.
+- **When the `garam` integration reaches this API.** Its shape is no longer open: `garam` serves no list and writes no `Agent` — this operator is the source of truth for which agents exist and tells `garam` afterwards, receiving the agent's identifier and its client certificate in return. What is open is timing, and one dependency: the operator authenticates by mTLS, and the means of creating its own first certificate is decided but unbuilt on `garam`'s side. Until that exists there is no working deployment in which this operator could call `garam` at all, which is why `v1alpha1` makes no outbound call.
+- **Resizing an agent's volume.** A StatefulSet's claim template is immutable after creation, so a change to `spec.storageSize` on an existing `Agent` cannot be satisfied by editing the workload. ADR 0005 accepts the limitation without answering it.
