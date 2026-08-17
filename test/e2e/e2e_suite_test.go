@@ -22,6 +22,21 @@ var (
 	shouldCleanupCertManager = false
 )
 
+// The Agent under test runs an image that is not the agent, because no gagent
+// image exists to run. What the suite needs of it is an entrypoint that stays up
+// without being given a command — the operator sets none — and a shell that can
+// read the mounted credentials.
+const (
+	// agentImageSource is pinned by digest, so the bytes cannot change under the
+	// tag.
+	agentImageSource = "nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"
+
+	// agentImage is the reference the Agent under test carries. It resolves in no
+	// registry: the suite puts this image on the node, and a Pod that reaches for
+	// a registry instead fails rather than quietly running some other nginx.
+	agentImage = "gagent-e2e-agent:nginx-1.29-alpine"
+)
+
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
 // The default setup requires Kind and CertManager.
 //
@@ -46,13 +61,81 @@ var _ = BeforeSuite(func() {
 	err = utils.LoadImageToKindClusterWithName(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
 
+	By("pulling the image the Agent under test runs")
+	cmd = exec.Command(containerTool(), "pull", agentImageSource)
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to pull the image for the Agent under test")
+
+	By("naming that image for the Agent under test")
+	cmd = exec.Command(containerTool(), "tag", agentImageSource, agentImage)
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to name the image for the Agent under test")
+
+	By("loading the Agent's image on Kind")
+	err = utils.LoadImageToKindClusterWithName(agentImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the Agent's image into Kind")
+
 	configureKubectlKubeRC()
 	setupCertManager()
+	deployOperator()
 })
 
 var _ = AfterSuite(func() {
+	undeployOperator()
 	teardownCertManager()
 })
+
+// containerTool is the tool that builds and pulls images, which the Makefile
+// passes through so that the image the Agent runs lands in the same store the
+// manager image was built into.
+func containerTool() string {
+	if tool := os.Getenv("CONTAINER_TOOL"); tool != "" {
+		return tool
+	}
+
+	return "docker"
+}
+
+// deployOperator installs the CRDs and the manager, once for every container in
+// the suite: a container that tore them down in its own AfterAll would take them
+// from whichever container Ginkgo ordered after it.
+func deployOperator() {
+	By("creating manager namespace")
+	cmd := exec.Command("kubectl", "create", "ns", namespace)
+	_, err := utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create namespace")
+
+	By("labeling the namespace to enforce the restricted security policy")
+	cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+		"pod-security.kubernetes.io/enforce=restricted")
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+
+	By("installing CRDs")
+	cmd = exec.Command("make", "install")
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+	By("deploying the controller-manager")
+	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+}
+
+// undeployOperator removes what deployOperator installed.
+func undeployOperator() {
+	By("undeploying the controller-manager")
+	cmd := exec.Command("make", "undeploy")
+	_, _ = utils.Run(cmd)
+
+	By("uninstalling CRDs")
+	cmd = exec.Command("make", "uninstall")
+	_, _ = utils.Run(cmd)
+
+	By("removing manager namespace")
+	cmd = exec.Command("kubectl", "delete", "ns", namespace)
+	_, _ = utils.Run(cmd)
+}
 
 // Disable kubectl kuberc by default for test isolation.
 // This prevents local kubectl configurations from affecting test behavior.
