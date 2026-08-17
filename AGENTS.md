@@ -20,7 +20,7 @@ When two conventions genuinely disagree, stop and report it. Choosing one yourse
 
 These documents assign authority to two roles. One party may hold both; the rules do not relax when it does.
 
-- **PM** — owns `docs/convention/`, `docs/architecture/`, the templates under `.github/`, and the issue tracker — what binds a contributor without implementing anything. Reviews every pull request and is the only role that merges one. Decides the convention questions a pull request raises. Proposes a change to a convention rather than making it alone. Does not implement.
+- **PM** — owns what binds a contributor without implementing anything: `docs/convention/`, `docs/architecture/`, the templates under `.github/`, this file, and the issue tracker. Reviews every pull request and is the only role that merges one. Decides the convention questions a pull request raises. Proposes a change to a convention rather than making it alone. Does not implement.
 - **Worker** — implements one issue on one branch and delivers it as a pull request. Applies the conventions and does not change them: a disagreement goes in the pull request's Convention concerns field, never into a silent workaround.
 
 ## What this file outranks
