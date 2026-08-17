@@ -6,6 +6,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
@@ -29,8 +30,9 @@ const (
 )
 
 // reconcileStatefulSet brings the StatefulSet an Agent describes into being, or
-// brings an existing one back to what the Agent's spec says.
-func (r *AgentReconciler) reconcileStatefulSet(ctx context.Context, agent *agentv1alpha1.Agent) error {
+// brings an existing one back to what the Agent's spec says, and returns it as
+// the cluster now holds it.
+func (r *AgentReconciler) reconcileStatefulSet(ctx context.Context, agent *agentv1alpha1.Agent) (*appsv1.StatefulSet, error) {
 	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: agent.Name, Namespace: agent.Namespace},
 	}
@@ -39,14 +41,28 @@ func (r *AgentReconciler) reconcileStatefulSet(ctx context.Context, agent *agent
 		return applyAgent(agent, statefulSet, r.Scheme)
 	})
 	if err != nil {
-		return fmt.Errorf("create or update statefulset: %w", err)
+		return nil, fmt.Errorf("create or update statefulset: %w", err)
 	}
 
 	if operation != controllerutil.OperationResultNone {
 		logf.FromContext(ctx).Info("Reconciled the StatefulSet", "statefulSet", statefulSet.Name, "operation", operation)
 	}
 
-	return nil
+	return statefulSet, nil
+}
+
+// claimedStorageSize is the size of the volume the StatefulSet claims for the
+// agent's state, and the zero quantity when it claims none. A claim template
+// cannot be changed after creation, so this is what an Agent's storage size is
+// worth comparing against.
+func claimedStorageSize(statefulSet *appsv1.StatefulSet) resource.Quantity {
+	for _, claim := range statefulSet.Spec.VolumeClaimTemplates {
+		if claim.Name == stateVolumeName {
+			return *claim.Spec.Resources.Requests.Storage()
+		}
+	}
+
+	return resource.Quantity{}
 }
 
 // applyAgent writes the fields an Agent's spec decides onto statefulSet and

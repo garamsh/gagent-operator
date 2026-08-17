@@ -21,6 +21,12 @@ rules:
   - list
   - watch
 - apiGroups:
+  - agent.garam.sh
+  resources:
+  - agents/status
+  verbs:
+  - update
+- apiGroups:
   - apps
   resources:
   - statefulsets
