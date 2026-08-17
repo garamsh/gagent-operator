@@ -27,4 +27,5 @@ None yet. The operator has no API types and no controllers: `PROJECT` lists no r
 |---|---|---|
 | `adr/0001-kubebuilder-go-v4-scaffold.md` | Build the operator on the kubebuilder go/v4 scaffold | accepted |
 | `adr/0002-dev-integration-branch.md` | Integrate on `dev` and keep `main` for released state | accepted |
-| `adr/0003-single-stack-convention-file.md` | Govern Go with one stack file written for the operator | accepted |
+| `adr/0003-single-stack-convention-file.md` | Govern Go with one stack file written for the operator | superseded by ADR-0004 |
+| `adr/0004-extend-stack-go.md` | Extend `stack-go.md` instead of replacing it | accepted |
