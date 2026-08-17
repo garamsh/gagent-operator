@@ -219,8 +219,14 @@ Rules:
   logs it once, with the controller name, the object, and the reconcile ID
   attached. A line written on the way up prints the same failure a second time
   without those fields.
-- A panic in a reconciler takes down the manager. Parse and check rather than
-  asserting.
+- **A recovered panic is indistinguishable from a transient failure.**
+  controller-runtime recovers a panic in Reconcile unless `RecoverPanic` is set
+  to false: it defaults to true
+  (`sigs.k8s.io/controller-runtime/pkg/config/controller.go:56`) and the panic
+  becomes `fmt.Errorf("panic: %v [recovered]", r)`
+  (`pkg/internal/controller/controller.go:203`) — an ordinary returned error,
+  which §4 then governs. A nil-map write therefore loops instead of crashing,
+  and reads like a network blip. Parse and check rather than asserting.
 
 ## 8. Logging
 
