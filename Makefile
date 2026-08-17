@@ -103,8 +103,35 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: lint-coverage golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
+
+# `0 issues.` reads the same whether the linter opened every file or none, and
+# here it has already been the second: until #36 nothing behind `//go:build e2e`
+# was ever read. This target plants a misspelling in every tracked Go file, in a
+# copy of the tree, and requires the linter to report each one back — a file the
+# config stops reaching fails the check instead of going quiet. Generated output
+# is left out because `exclusions.generated` filters its findings by design.
+# The flags lift the truncation that would keep 3 of the 14 identical findings,
+# and run only the linter carrying the plant: reach is decided by the build
+# tags, paths and exclusions, which all still apply, and a full analysis costs
+# 17s against 0.2s for the same answer.
+.PHONY: lint-coverage
+lint-coverage: golangci-lint ## Report the tracked Go files the linter reaches, and fail when one is unreachable.
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	total=$$(git ls-files '*.go' | wc -l); \
+	expected=$$(git ls-files '*.go' | xargs -r grep -L '^// Code generated .* DO NOT EDIT\.$$'); \
+	[ -n "$$expected" ] || { echo "lint coverage: no tracked Go file to probe" >&2; exit 1; }; \
+	git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$$tmp"; \
+	for f in $$expected; do printf '\n// lint coverage probe: recieve\n' >>"$$tmp/$$f"; done; \
+	( cd "$$tmp" && GOLANGCI_LINT_CACHE="$$tmp/cache" "$(GOLANGCI_LINT)" run --enable-only misspell --max-same-issues=0 --max-issues-per-linter=0 >probe.out ) || true; \
+	reached=0; missing=; \
+	for f in $$expected; do \
+		if grep -qE "(^|/)$$f:[0-9]+:[0-9]+: .*\(misspell\)$$" "$$tmp/probe.out"; \
+		then reached=$$((reached+1)); else missing="$$missing $$f"; fi; \
+	done; \
+	[ -z "$$missing" ] || { echo "lint coverage: the linter reported nothing planted in:$$missing" >&2; exit 1; }; \
+	echo "lint coverage: $$reached of $$total tracked Go files reported a planted violation ($$((total-reached)) generated, not expected to)"
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
