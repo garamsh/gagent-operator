@@ -160,11 +160,24 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx rm gagent-operator-builder
 	rm Dockerfile.cross
 
+# `kustomize edit set image` writes to the kustomization it runs in, and
+# config/manager/kustomization.yaml is a tracked manifest: a target that edited it
+# would hand the next one a dirty tree. This overlay carries the override instead,
+# and it is build output — rebuilt from scratch on every run, so nothing stale
+# survives a change to IMG.
+IMAGE_OVERLAY := dist/image-overlay
+
+.PHONY: image-overlay
+image-overlay: kustomize ## Write the kustomize overlay that points the manager image at IMG.
+	rm -rf $(IMAGE_OVERLAY)
+	mkdir -p $(IMAGE_OVERLAY)
+	cd $(IMAGE_OVERLAY) && "$(KUSTOMIZE)" create --resources ../../config/default
+	cd $(IMAGE_OVERLAY) && "$(KUSTOMIZE)" edit set image controller=${IMG}
+
 .PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
+build-installer: manifests generate kustomize image-overlay ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
+	"$(KUSTOMIZE)" build $(IMAGE_OVERLAY) > dist/install.yaml
 
 ##@ Deployment
 
@@ -183,9 +196,8 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
 
 .PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+deploy: manifests kustomize image-overlay ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+	"$(KUSTOMIZE)" build $(IMAGE_OVERLAY) | "$(KUBECTL)" apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
