@@ -19,7 +19,9 @@ Current architecture of the system and the decisions behind it. This file is the
 
 ### Responsibility documents
 
-None yet. The operator has no API types and no controllers: `PROJECT` lists no resources, and `api/` and `internal/controller/` do not exist. There is no domain to describe, which Rule 5 makes the correct state. The pull request that scaffolds the first kind adds its document.
+| Document | Covers |
+|---|---|
+| `agent.md` | The `agent.garam.sh` API group, the `Agent` kind, and its controller |
 
 ### ADRs
 

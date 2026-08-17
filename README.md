@@ -12,7 +12,7 @@ Two things it is not: it is not the agent, which lives in a separate repository,
 
 ## Status
 
-Scaffolded, not yet implemented. `PROJECT` lists no resources, and there is no `api/` or `internal/controller/` directory — the first `kubebuilder create api` has not been run. What exists today is the manager entry point, the deployment manifests, the check pipeline, and the rules under `docs/`.
+The API exists; the controller does not act yet. `PROJECT` lists the `Agent` resource, `api/v1alpha1/` holds its types, `config/crd/bases/` holds the CRD they generate, and `internal/controller/` holds a reconciler that reads the object and returns. Nothing builds the workload an `Agent` describes.
 
 ## Requirements
 
