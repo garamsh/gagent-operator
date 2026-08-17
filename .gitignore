@@ -37,7 +37,7 @@ go.work.sum
 # Tool binaries and envtest assets downloaded by the Makefile into $(LOCALBIN)
 bin/*
 
-# Output of `make build-installer`
+# Output of `make build-installer`, and the image overlay `make deploy` builds from
 dist/
 
 # Cross-platform build stage written by `make docker-buildx`
