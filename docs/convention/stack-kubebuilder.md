@@ -246,7 +246,8 @@ Rules:
 - **Structured key-value pairs, balanced.** `logcheck` is enabled in
   `.golangci.yml` and fails an odd argument list.
 - Levels: `Info` for state changes a user would want to see, `Error` for a
-  failure being returned, `V(1)` and deeper for per-reconcile detail.
+  failure this code handles instead of returning — the manager logs a returned
+  error itself (§7) — `V(1)` and deeper for per-reconcile detail.
 - **Never log secrets** — token values, key material, or a whole object that
   may carry them. Log the reference, not the content.
 - The reconcile path is hot. A log line per reconcile per object is a cost;
