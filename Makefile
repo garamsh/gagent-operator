@@ -103,8 +103,33 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: lint-coverage golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
+
+# `0 issues.` is the same output whether the linter read every file or none, and
+# it has already been the second one here: until #36 nothing behind `//go:build
+# e2e` was ever opened. This target plants a misspelling in every tracked Go
+# file, in a copy of the tree, and requires the linter to report each one back —
+# so a file the config stops reaching fails the check instead of going quiet.
+# Generated output is excluded because `exclusions.generated` filters its
+# findings by design. The two `--max-*` flags disable output truncation only:
+# the planted violations share one message, and the default keeps 3 of them.
+.PHONY: lint-coverage
+lint-coverage: golangci-lint ## Report the tracked Go files the linter reaches, and fail when one is unreachable.
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	total=$$(git ls-files '*.go' | wc -l); \
+	expected=$$(git ls-files '*.go' | xargs -r grep -L '^// Code generated .* DO NOT EDIT\.$$'); \
+	[ -n "$$expected" ] || { echo "lint coverage: no tracked Go file to probe" >&2; exit 1; }; \
+	git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$$tmp"; \
+	for f in $$expected; do printf '\n// lint coverage probe: recieve\n' >>"$$tmp/$$f"; done; \
+	( cd "$$tmp" && GOLANGCI_LINT_CACHE="$$tmp/cache" "$(GOLANGCI_LINT)" run --path-mode abs --max-same-issues=0 --max-issues-per-linter=0 >probe.out ) || true; \
+	reached=0; missing=; \
+	for f in $$expected; do \
+		if grep -qE "(^|/)$$f:[0-9]+:[0-9]+: .*\(misspell\)$$" "$$tmp/probe.out"; \
+		then reached=$$((reached+1)); else missing="$$missing $$f"; fi; \
+	done; \
+	[ -z "$$missing" ] || { echo "lint coverage: the linter reported nothing planted in:$$missing" >&2; exit 1; }; \
+	echo "lint coverage: $$reached of $$total tracked Go files reported a planted violation ($$((total-reached)) generated, not expected to)"
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
