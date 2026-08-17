@@ -38,9 +38,9 @@ as licence for a new `utils` elsewhere.
 
 ## 1. Directory layout
 
-- `cmd/main.go` — the manager entry point, and the only place that constructs
-  concrete controllers and registers them with the manager. Keep it thin: flag
-  parsing, scheme registration, manager construction, `SetupWithManager` calls.
+- `cmd/main.go` — the manager entry point. No directory named for the binary:
+  the CLI writes this exact path. What belongs in it here is flag parsing,
+  scheme registration, manager construction, and the `SetupWithManager` calls.
 - `api/<version>/<kind>_types.go` — one file per kind, holding its `Spec`,
   `Status`, the object, and its list type. This project is single-group, so
   types live directly under `api/<version>/`.
@@ -261,6 +261,11 @@ Rules:
 | Integration | envtest — real `kube-apiserver` and `etcd` binaries | `internal/controller/` |
 | E2E | a Kind cluster | `test/e2e/` |
 
+- **A controller package's tests are internal**, in the package under test and
+  not in a `_test` package beside it. The scaffold's `suite_test.go` holds the
+  `k8sClient` and the environment its sibling files use, and package-level state
+  shared across files cannot cross a package boundary. This is the layout the
+  CLI writes and the one `create api` writes into again.
 - **Integration tests use envtest, not a fake client.** A fake client does not
   run defaulting, validation, or the status subresource, so it proves less than
   it appears to.
