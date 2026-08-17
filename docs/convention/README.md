@@ -32,29 +32,30 @@ This project has no architecture file. Its shape is fixed by the kubebuilder sca
 
 These apply only when the project uses that stack.
 
-| File | Governs |
-|---|---|
-| `stack-container.md` | What an OCI image the project builds is made of — bases, build secrets, what an image may carry |
-| `stack-kubebuilder.md` | Go operators scaffolded by kubebuilder: layout, API types, controllers, markers, logging, tests |
+| File | Extends | Governs |
+|---|---|---|
+| `stack-container.md` | — | What an OCI image the project builds is made of — bases, build secrets, what an image may carry |
+| `stack-go.md` | — | Go modules and services |
+| `stack-kubebuilder.md` | `stack-go.md` | What the kubebuilder scaffold decides differently: CLI-owned paths, generated code, API types and markers, reconcile behaviour, and the runner and logger it ships |
 
-`Dockerfile` is named by both, and the split is here: `stack-kubebuilder.md` decides where it sits and that the scaffold owns that path, `stack-container.md` decides what goes inside it.
+`Dockerfile` is named by both `stack-container.md` and `stack-kubebuilder.md`, and the split is here: `stack-kubebuilder.md` decides where it sits and that the scaffold owns that path, `stack-container.md` decides what goes inside it.
 
 A stack file states the concrete form of what a stack-neutral file governs: the test runner and file placement behind `testing.md`, the comment syntax behind `code-comments.md`, the commands behind an entry-point name in `ci.md`. It never restates the rule itself. This table is where that split is recorded — the files do not point at each other.
 
-`stack-kubebuilder.md` owns every Go rule here, the general ones included. This project has no separate `stack-go.md`: a second file governing the same `.go` files would break the one-file-one-territory rule below, and the operator's layout, logging, and test rules are not the general Go ones.
+A stack built on another stack takes a row with a base in the Extends column. The derived file holds only the rules its stack changes — one rule, not the section around it — and the base governs every rule it does not, so a project keeping the derived file keeps the base too. A base has no base of its own: one level, so that opening two files is always enough.
 
 ## Independence
 
-Each convention file is self-contained: reading it alone is enough to apply its rules.
+Reading a convention file is enough to apply its rules. Where the Extends column gives it a base, it is that file and its base, and there reading stops.
 
-- **One file, one territory.** No artifact is governed by two files. Where two files could both decide a case, one of them is holding the wrong rule.
-- **A rule appears once** — inside a file as much as across files. A section that restates earlier rules in the negative is a second site to keep in sync, not a summary.
+- **One file, one territory.** No artifact is governed by two files, unless one extends the other: the derived file decides the rules it holds and the base decides the rest. Where two files with no such relationship could both decide a case, one of them is holding the wrong rule.
+- **A rule appears once** — inside a file as much as across files. A section that restates earlier rules in the negative is a second site to keep in sync, not a summary. A derived file that repeats a base rule it does not change is that same defect: what it does not hold, it does not copy.
 - **Two files' rules may share a reason.** That is not duplication. Each states its own reason; neither points at the other for it.
-- **A convention file does not send the reader to another convention file.** Where one file's territory ends and the next begins is recorded in the table above, not inside the files themselves.
+- **A convention file does not send the reader to another convention file.** Where one file's territory ends and the next begins, a base included, is recorded in the table above, not inside the files themselves.
 
 ## Precedence
 
-1. The stack-specific file, when one applies.
+1. The stack-specific file, when one applies; the derived file before the base it extends.
 2. The stack-neutral files.
 3. This index.
 
