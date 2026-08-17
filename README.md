@@ -12,7 +12,7 @@ Two things it is not: it is not the agent, which lives in a separate repository,
 
 ## Status
 
-The API exists; the controller does not act yet. `PROJECT` lists the `Agent` resource, `api/v1alpha1/` holds its types, `config/crd/bases/` holds the CRD they generate, and `internal/controller/` holds a reconciler that reads the object and returns. Nothing builds the workload an `Agent` describes.
+The controller builds an Agent's workload and reports nothing back. `api/v1alpha1/` holds the `Agent` types and `config/crd/bases/` the CRD they generate; `internal/controller/` reconciles an `Agent` into a StatefulSet it owns. An `Agent`'s `status` stays empty whatever happens to that workload.
 
 ## Requirements
 
