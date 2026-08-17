@@ -111,9 +111,12 @@ Rules:
   `+listMapKey=type`. Keep those markers — they are what makes the list
   server-side-apply safe — and write the slice only through
   `meta.SetStatusCondition`, never by appending.
-- **Re-read the object before updating it again.** A status update bumps the
-  resource version, so a second write in the same reconcile using the stale copy
-  fails with a conflict.
+- **A second write goes through the object the first one updated, not a copy
+  taken before it.** A write bumps the resource version and the client writes
+  the new one back into the object it was given, so writing twice through that
+  object succeeds; a copy held from before the first write carries the old
+  version and is refused. The rule is about holding two copies, not about
+  writing twice — re-read only when the copy in hand predates a write.
 - **Status carries `observedGeneration`**, set to the object's `Generation` at
   the end of a successful reconcile, so a stale status is detectable.
 - An API version is immutable once released. A change that would break an
