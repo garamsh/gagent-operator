@@ -119,12 +119,14 @@ lint: lint-coverage golangci-lint ## Run golangci-lint linter
 # That flag also overrides the `enable` list, so the plant says something about
 # `make lint` only while that list still names misspell: requiring it is what
 # fails a list emptied to nothing, which otherwise leaves this line and
-# `0 issues.` reading exactly as they do on a healthy run (#50). The count is of
-# how many linters run, not of which — dropping one of the other 19 leaves both
-# numbers right.
+# `0 issues.` reading exactly as they do on a healthy run (#50). The second
+# `sed` stops the read at the disabled half of `linters`, which a lost blank
+# line would otherwise let answer for the enabled half. The count is of how many
+# linters run, not of which — dropping one of the other 19 leaves both numbers
+# right.
 .PHONY: lint-coverage
 lint-coverage: golangci-lint ## Report the linters make lint runs and the tracked Go files it reaches, and fail when either covers nothing.
-	@rules=$$("$(GOLANGCI_LINT)" linters | sed -n '/^Enabled by your configuration/,/^$$/s/^\([^: ]*\): .*/\1/p'); \
+	@rules=$$("$(GOLANGCI_LINT)" linters | sed -n '/^Enabled by your configuration/,/^$$/p' | sed -n '/^Disabled/q; s/^\([^: ]*\): .*/\1/p'); \
 	enabled=$$(printf '%s\n' "$$rules" | grep -c . || true); \
 	printf '%s\n' "$$rules" | grep -qx misspell || { echo "lint coverage: .golangci.yml enables $$enabled linters and misspell is not among them, so the plant below reports nothing about what \`make lint\` runs" >&2; exit 1; }; \
 	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
