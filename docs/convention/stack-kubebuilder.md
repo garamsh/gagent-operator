@@ -89,6 +89,12 @@ Rules:
   every project. This repository's `AGENTS.md` is the contribution contract and
   outranks it. An upgrade that offers to replace that file is refused; its other
   changes are taken normally.
+- **An upgrade re-adds `// +build` lines, and they are deleted again.** The CLI
+  writes both build constraints into every tagged file, and the second is dead
+  on every Go version this project supports. `make lint` reads tagged files and
+  rejects it, so an upgrade taken whole fails the check set. Delete the lines
+  rather than excluding the rule: an exclusion would quiet the entry point about
+  the files it was just taught to read.
 
 ## 3. API types
 
