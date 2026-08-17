@@ -228,6 +228,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: metadata.name must be 52 characters or fewer, because the Pods
+            of this Agent's workload carry the name with a suffix of up to 11 characters
+            in a label, and a label value stops at 63
+          rule: self.metadata.name.size() <= 52
     served: true
     storage: true
     subresources:
