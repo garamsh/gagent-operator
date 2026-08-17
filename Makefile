@@ -106,18 +106,16 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 lint: lint-coverage golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
 
-# `0 issues.` is the same output whether the linter read every file or none, and
-# it has already been the second one here: until #36 nothing behind `//go:build
-# e2e` was ever opened. This target plants a misspelling in every tracked Go
-# file, in a copy of the tree, and requires the linter to report each one back —
-# so a file the config stops reaching fails the check instead of going quiet.
-# Generated output is excluded because `exclusions.generated` filters its
-# findings by design. The two `--max-*` flags disable output truncation only:
-# the planted violations share one message, and the default keeps 3 of them.
-# The question is which files the config reaches, so only the linter carrying
-# the plant runs; a full analysis answers the same question and takes 17s
-# rather than 0.2s. Reach is the config's build tags, paths and exclusions —
-# all of which still apply — and not which linters the enable list holds.
+# `0 issues.` reads the same whether the linter opened every file or none, and
+# here it has already been the second: until #36 nothing behind `//go:build e2e`
+# was ever read. This target plants a misspelling in every tracked Go file, in a
+# copy of the tree, and requires the linter to report each one back — a file the
+# config stops reaching fails the check instead of going quiet. Generated output
+# is left out because `exclusions.generated` filters its findings by design.
+# The flags lift the truncation that would keep 3 of the 14 identical findings,
+# and run only the linter carrying the plant: reach is decided by the build
+# tags, paths and exclusions, which all still apply, and a full analysis costs
+# 17s against 0.2s for the same answer.
 .PHONY: lint-coverage
 lint-coverage: golangci-lint ## Report the tracked Go files the linter reaches, and fail when one is unreachable.
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
@@ -126,7 +124,7 @@ lint-coverage: golangci-lint ## Report the tracked Go files the linter reaches, 
 	[ -n "$$expected" ] || { echo "lint coverage: no tracked Go file to probe" >&2; exit 1; }; \
 	git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$$tmp"; \
 	for f in $$expected; do printf '\n// lint coverage probe: recieve\n' >>"$$tmp/$$f"; done; \
-	( cd "$$tmp" && GOLANGCI_LINT_CACHE="$$tmp/cache" "$(GOLANGCI_LINT)" run --enable-only misspell --path-mode abs --max-same-issues=0 --max-issues-per-linter=0 >probe.out ) || true; \
+	( cd "$$tmp" && GOLANGCI_LINT_CACHE="$$tmp/cache" "$(GOLANGCI_LINT)" run --enable-only misspell --max-same-issues=0 --max-issues-per-linter=0 >probe.out ) || true; \
 	reached=0; missing=; \
 	for f in $$expected; do \
 		if grep -qE "(^|/)$$f:[0-9]+:[0-9]+: .*\(misspell\)$$" "$$tmp/probe.out"; \
