@@ -14,7 +14,17 @@ spec:
     singular: agent
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Synced")].status
+      name: Synced
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Synced")].reason
+      name: Reason
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Agent is the Schema for the agents API
@@ -140,13 +150,13 @@ spec:
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the Agent resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
+                  conditions report what the controller observed of this Agent. One type is
+                  set:
 
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
+                  - "Synced": True when the cluster carries the workload this Agent's spec
+                    asks for. False when the Secret named by credentialsSecretName does not
+                    exist, and False when the spec was edited in a way the running workload
+                    cannot take. The reason says which.
 
                   The status of each condition is one of True, False, or Unknown.
                 items:
