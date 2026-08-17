@@ -1,8 +1,9 @@
 # Kubebuilder — Operator Conventions
 
-> How this operator's Go code is laid out and written: directories, API types,
-> controllers, markers, logging, tests, and the commands behind the entry-point
-> names.
+> What the kubebuilder scaffold decides differently: the paths the CLI owns,
+> the code it generates, API types and their markers, reconcile behaviour, and
+> the runner, logger, and commands the scaffold ships instead of the general
+> Go ones.
 >
 > Checked against kubebuilder 4.15.0 (layout `go.kubebuilder.io/v4`, PROJECT
 > version 3), controller-runtime 0.24.1, controller-gen 0.21.0, Kubernetes
@@ -31,14 +32,7 @@ The scaffold owns the top-level shape. `cmd/`, `api/`, `internal/`, `config/`,
 CLI; do not rename or relocate them, because the CLI writes into those exact
 paths on the next `create api` or `create webhook`.
 
-Inside a package, a file is named for what it owns: `agent_controller.go`,
-`pod_builder.go`, `agent_types.go`.
-
-Banned as authored names, at any level: `model.go`, `utils/`, `helpers/`,
-`common/`, `ext/`, `kit/`, `repo/`. If two helpers share a concept, name the
-concept.
-
-`test/utils/` is the one exception. It is scaffolded ground, rewritten by the
+`test/utils/` is the one exception to the banned-name list. It is scaffolded ground, rewritten by the
 CLI, and renaming it desynchronizes the scaffold; leave it and do not read it
 as licence for a new `utils` elsewhere.
 
@@ -188,43 +182,28 @@ Rules:
 
 ## 6. Naming
 
-- **Packages**: single word, lowercase, no underscores.
-- **Types**: `MixedCaps`, no underscores. A kind's Go type name matches its
-  CRD kind exactly.
-- **Functions and methods**: `MixedCaps`, verb-noun.
-- **Constants**: `MixedCaps`, grouped in `const ( ... )`. Condition type and
-  reason strings are constants, never string literals at the call site.
-- **Variables**: short in small scopes, `MixedCaps` at package level.
-- **Receivers**: short and consistent across a type's methods (`r *AgentReconciler`).
-- **Initialisms**: `URL`, `ID`, `HTTP`, `JSON`, `API`, `TLS`, `CRD` — uniformly
-  upper or lower, never mixed.
+- **A kind's Go type name matches its CRD kind exactly.** The type is what
+  `controller-gen` reads the kind from, so the two cannot drift.
+- **Condition type and reason strings are constants**, never string literals at
+  the call site. They are matched by `meta.FindStatusCondition` and read by
+  users in `kubectl describe`; a typo in a literal creates a second condition
+  instead of failing.
 
 ## 7. Error handling
 
-- **An adapter translates before it returns.** The client that talks to an
-  external API turns that library's error into one this module declares; the
-  library's error type does not leave the file that imports the library. What an
-  implementation returns is part of the interface it satisfies, so one that
-  leaks its library's errors is not one a fake can stand in for.
-- **Sentinel, typed, or opaque — what the caller does decides which.** A
-  sentinel (`var ErrX = errors.New(...)`, read with `errors.Is`) where the
-  caller branches on which failure and the failure carries no data. A typed
-  error (a struct with `Error()`, read with `errors.As`) where the caller needs
-  data out of the failure. Opaque where nothing branches — the common case here,
-  because Reconcile's caller is controller-runtime and it does not branch. A
-  sentinel or a type a caller can match on is API that has to keep working.
-- **`%w` publishes the error it wraps.** A caller reaches through it with
-  `errors.Is` and `errors.As`, so replacing what is inside breaks that caller
-  later. Wrap with `%w` where a caller is meant to reach the wrapped error —
-  `apierrors.IsNotFound` matches through a wrap, by `errors.As` on `APIStatus`
-  (`k8s.io/apimachinery/pkg/api/errors/errors.go:818`) — with `%v` where it is
-  not, and `errors.Join` where the caller needs all of several.
-- **Add context at a boundary** — an API call, an external request, a parse —
-  not on every line: `fmt.Errorf("fetch agent config: %w", err)`.
-- **Do not log and return the same error.** Reconcile returns it and the manager
-  logs it once, with the controller name, the object, and the reconcile ID
-  attached. A line written on the way up prints the same failure a second time
-  without those fields.
+- **Opaque is the usual answer here.** Reconcile's caller is controller-runtime,
+  which does not branch on which failure it got, so an error leaving a
+  reconciler normally publishes nothing to match on. A sentinel or a typed error
+  earns its place when something inside this module branches on it.
+- **The client wrapping a `client.Client` call keeps `%w`.** `apierrors.IsNotFound`
+  and its siblings reach through a wrap, by `errors.As` on `APIStatus`
+  (`k8s.io/apimachinery/pkg/api/errors/errors.go:818`); wrapping an API error
+  with `%v` silently turns every `IsNotFound` check above it false, and a
+  controller that treats a deleted object as a hard failure requeues forever.
+- **The manager is the outermost boundary.** Reconcile returns and the manager
+  logs once, with the controller name, the object, and the reconcile ID
+  attached. There is no transport translator here and `main` never sees the
+  error — the manager is the whole of it.
 - **A recovered panic is indistinguishable from a transient failure.**
   controller-runtime recovers a panic in Reconcile unless `RecoverPanic` is set
   to false: it defaults to true
@@ -248,14 +227,11 @@ Rules:
 - Levels: `Info` for state changes a user would want to see, `Error` for a
   failure this code handles instead of returning — the manager logs a returned
   error itself (§7) — `V(1)` and deeper for per-reconcile detail.
-- **Never log secrets** — token values, key material, or a whole object that
-  may carry them. Log the reference, not the content.
 - The reconcile path is hot. A log line per reconcile per object is a cost;
   log transitions, not steady state.
 
 ## 9. Comments and docs
 
-- Doc comments begin with the name being declared.
 - API field comments are published (§3) and are written for the API's user.
 - Inline comments earn their place on a non-obvious invariant or an ordering
   constraint — not on paraphrase.
@@ -291,13 +267,10 @@ Rules:
 
 ## 11. Imports and dependencies
 
-Three groups, blank-line separated: standard library, third party, this module.
-`goimports -local github.com/garamsh/gagent-operator` produces the third group.
-
 - The Kubernetes libraries move together. `k8s.io/api`, `k8s.io/apimachinery`,
   `k8s.io/client-go`, and `sigs.k8s.io/controller-runtime` are upgraded in one
-  change, never individually.
-- `go mod tidy` after every dependency change, and the result is committed.
+  change, never individually. They share generated types and a client contract,
+  so a lone bump compiles and then fails at runtime on a type it did not expect.
 - `ENVTEST_VERSION` and `ENVTEST_K8S_VERSION` are derived from `go.mod` by the
   Makefile. Do not pin them by hand; change the module version instead.
 
@@ -317,9 +290,3 @@ These sit behind the project's entry-point names.
 | Run against the current kubecontext | `make run` |
 
 `make ci` is what CI invokes. Run it before pushing.
-
-**A target that has something to report prints it itself, before invoking
-`go test`.** `go test` prints only `ok <pkg>` for a package that passes and
-discards the rest of that package's output; the full output appears on failure,
-or under `-v`. So anything a test binary prints about what it covered is
-missing from exactly the run that needed it — the one that passed.
