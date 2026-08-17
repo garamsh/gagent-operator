@@ -128,7 +128,7 @@ lint: lint-coverage golangci-lint ## Run golangci-lint linter
 lint-coverage: golangci-lint ## Report the linters make lint runs and the tracked Go files it reaches, and fail when either covers nothing.
 	@rules=$$("$(GOLANGCI_LINT)" linters | sed -n '/^Enabled by your configuration/,/^$$/p' | sed -n '/^Disabled/q; s/^\([^: ]*\): .*/\1/p'); \
 	enabled=$$(printf '%s\n' "$$rules" | grep -c . || true); \
-	printf '%s\n' "$$rules" | grep -qx misspell || { echo "lint coverage: .golangci.yml enables $$enabled linters and misspell is not among them, so the plant below reports nothing about what \`make lint\` runs" >&2; exit 1; }; \
+	printf '%s\n' "$$rules" | grep -qx misspell || { echo "lint coverage: misspell is not among the $$enabled linters golangci-lint reports enabled, so the plant below says nothing about what \`make lint\` runs" >&2; exit 1; }; \
 	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	total=$$(git ls-files '*.go' | wc -l); \
 	expected=$$(git ls-files '*.go' | xargs -r grep -L '^// Code generated .* DO NOT EDIT\.$$'); \
