@@ -16,9 +16,10 @@ jobs:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
     steps:
-      # Dependabot moves the action pins below, rewriting the version comment with the
-      # SHA (`.github/dependabot.yml`). It does not repair a comment that has already
-      # drifted, and nothing here checks that the two agree.
+      # Dependabot moves the action pins below, rewriting the version comment with
+      # the SHA (`.github/dependabot.yml`) — but only while the two already agree,
+      # and only while the version is the last word on the line. `make verify-pins`
+      # fails when either stops holding.
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
