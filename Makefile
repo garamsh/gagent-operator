@@ -154,11 +154,66 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 
 ##@ Checks
 
+# A `uses:` line states one fact twice: the SHA GitHub resolves and the version
+# comment a human reads. Dependabot (`.github/dependabot.yml`) rewrites the two
+# together only while they already agree (dependabot-core#7912), and rewrites the
+# comment only while the version is the line's last word — `updated_version_comment`
+# in dependabot-core's github_actions file updater returns early on a comment
+# carrying anything after the version. Such a pin still resolves and still passes
+# every other check while nothing moves its comment again, so both halves are
+# required here: the version last, and the tag it names resolving to the SHA
+# beside it. The second alone would catch the appended note only after the next
+# bump, if ever.
+# `git ls-remote`, not the REST API: no token, no API rate limit, and it is the
+# transport a contributor already needs to push. A pin it cannot resolve fails —
+# "could not ask" is not "agrees", and a run that skipped every pin would read
+# exactly like one that compared them, which is what the two zero counts below
+# refuse.
+# The version pattern admits no glob character, and that is load-bearing:
+# `git ls-remote https://github.com/actions/checkout 'refs/tags/v*'` answers with
+# 72 refs, one of them the pinned SHA, so `# v*` passes any check that searches
+# the answer instead of reading the ref it named. Reading the peeled `^{}` value
+# first is the same guard for an annotated tag, whose unpeeled SHA is in the
+# answer and is not what GitHub runs.
+.PHONY: verify-pins
+verify-pins: ## Report every SHA-pinned action and fail when its version comment is not the line's last word or does not resolve to its SHA.
+	@shape='^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+([^@[:space:]]+)@([0-9a-f]{40})[[:space:]]+#[[:space:]]*(v?[0-9][A-Za-z0-9._+-]*)$$'; \
+	entries=$$(git grep -nE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]' -- '*.yml' '*.yaml' || true); \
+	total=$$(printf '%s' "$$entries" | grep -c . || true); \
+	[ "$$total" -gt 0 ] || { echo "pin check: no \`uses:\` line in any tracked YAML file, so nothing was checked" >&2; exit 1; }; \
+	pins=; malformed=; \
+	while IFS= read -r entry; do \
+		site=$$(printf '%s' "$$entry" | cut -d: -f1,2); \
+		line=$$(printf '%s' "$$entry" | cut -d: -f3- | sed 's/[[:space:]]*$$//'); \
+		if [[ "$$line" =~ $$shape ]]; then \
+			action="$${BASH_REMATCH[2]}"; rest="$${action#*/}"; \
+			pins=$$(printf '%s\n%s/%s %s %s' "$$pins" "$${action%%/*}" "$${rest%%/*}" "$${BASH_REMATCH[4]}" "$${BASH_REMATCH[3]}"); \
+		else \
+			malformed=$$(printf '%s\n  %s: %s' "$$malformed" "$$site" "$$line"); \
+		fi; \
+	done <<<"$$entries"; \
+	[ -z "$$malformed" ] || { printf 'pin check: not `<action>@<40-hex SHA> # <version>` with the version last, which is the only form Dependabot keeps rewriting:%s\n' "$$malformed" >&2; exit 1; }; \
+	files=$$(printf '%s\n' "$$entries" | cut -d: -f1 | sort -u | grep -c .); \
+	resolved=0; \
+	while read -r repo tag sha; do \
+		[ -n "$$repo" ] || continue; \
+		refs=$$(git ls-remote "https://github.com/$$repo" "refs/tags/$$tag" "refs/tags/$$tag^{}") || { echo "pin check: could not reach https://github.com/$$repo to resolve $$tag" >&2; exit 1; }; \
+		actual=$$(printf '%s\n' "$$refs" | awk -v t="refs/tags/$$tag^{}" '$$2==t{print $$1}'); \
+		[ -n "$$actual" ] || actual=$$(printf '%s\n' "$$refs" | awk -v t="refs/tags/$$tag" '$$2==t{print $$1}'); \
+		[ -n "$$actual" ] || { echo "pin check: $$repo has no tag $$tag, so the comment claiming it names nothing" >&2; exit 1; }; \
+		[ "$$actual" = "$$sha" ] || { echo "pin check: $$repo $$tag is $$actual, but the line commented $$tag pins $$sha" >&2; exit 1; }; \
+		resolved=$$((resolved+1)); \
+	done <<<"$$(printf '%s\n' "$$pins" | sort -u | grep -v '^$$' || true)"; \
+	[ "$$resolved" -gt 0 ] || { echo "pin check: $$total \`uses:\` lines and not one pin to resolve, so nothing was compared" >&2; exit 1; }; \
+	echo "pin check: $$total action pins across $$files tracked YAML files, $$resolved distinct tags resolved, every version comment names the SHA beside it"
+
 # The single name for the whole check set. CI invokes this target, not the
 # commands inside it. `lint` runs before `fmt` so unformatted code fails the
-# check instead of being rewritten and passing.
+# check instead of being rewritten and passing. `verify-pins` runs last because
+# it is the one step that needs the network, and a contributor who cannot reach
+# github.com cannot push what the rest of the set just cleared either.
 .PHONY: ci
-ci: lint-config lint fmt test build ## Run the whole check set — lint, format, test, build.
+ci: lint-config lint fmt test build verify-pins ## Run the whole check set — lint, format, test, build.
 
 ##@ Build
 
