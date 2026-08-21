@@ -116,9 +116,20 @@ lint: lint-coverage golangci-lint ## Run golangci-lint linter
 # and run only the linter carrying the plant: reach is decided by the build
 # tags, paths and exclusions, which all still apply, and a full analysis costs
 # 17s against 0.2s for the same answer.
+# That flag also overrides the `enable` list, so the plant says something about
+# `make lint` only while that list still names misspell: requiring it is what
+# fails a list emptied to nothing, which otherwise leaves this line and
+# `0 issues.` reading exactly as they do on a healthy run (#50). The second
+# `sed` stops the read at the disabled half of `linters`, which a lost blank
+# line would otherwise let answer for the enabled half. The count is of how many
+# linters run, not of which — dropping one of the other 19 leaves both numbers
+# right.
 .PHONY: lint-coverage
-lint-coverage: golangci-lint ## Report the tracked Go files the linter reaches, and fail when one is unreachable.
-	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+lint-coverage: golangci-lint ## Report the linters make lint runs and the tracked Go files it reaches, and fail when either covers nothing.
+	@rules=$$("$(GOLANGCI_LINT)" linters | sed -n '/^Enabled by your configuration/,/^$$/p' | sed -n '/^Disabled/q; s/^\([^: ]*\): .*/\1/p'); \
+	enabled=$$(printf '%s\n' "$$rules" | grep -c . || true); \
+	printf '%s\n' "$$rules" | grep -qx misspell || { echo "lint coverage: misspell is not among the $$enabled linters golangci-lint reports enabled, so the plant below says nothing about what \`make lint\` runs" >&2; exit 1; }; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	total=$$(git ls-files '*.go' | wc -l); \
 	expected=$$(git ls-files '*.go' | xargs -r grep -L '^// Code generated .* DO NOT EDIT\.$$'); \
 	[ -n "$$expected" ] || { echo "lint coverage: no tracked Go file to probe" >&2; exit 1; }; \
@@ -131,7 +142,7 @@ lint-coverage: golangci-lint ## Report the tracked Go files the linter reaches, 
 		then reached=$$((reached+1)); else missing="$$missing $$f"; fi; \
 	done; \
 	[ -z "$$missing" ] || { echo "lint coverage: the linter reported nothing planted in:$$missing" >&2; exit 1; }; \
-	echo "lint coverage: $$reached of $$total tracked Go files reported a planted violation ($$((total-reached)) generated, not expected to)"
+	echo "lint coverage: $$enabled linters enabled, $$reached of $$total tracked Go files reported a planted violation ($$((total-reached)) generated, not expected to)"
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
