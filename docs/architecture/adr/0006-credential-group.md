@@ -38,3 +38,17 @@ Neither mode protected the file from something reading the kubelet's directory o
 Not decided here: the rest of the Pod's security context. `runAsNonRoot`, `seccompProfile`, `allowPrivilegeEscalation` and capability drops each constrain what a user's image may be, which is a statement about the API's contract rather than a fix for this defect.
 
 Ruled out: matching the container's user, widening the file to world-readable, and a field on `AgentSpec` for the image's uid — the last on a measurement rather than a preference.
+
+## Errata
+
+### 2026-08-23 — the group is not granted to every process in the Pod
+
+Context rejects a uid field on `AgentSpec` with this: "`fsGroup` is a group the kubelet *grants* to every process in the Pod, not one that has to correspond to anything in the image." The second clause is what the rejection rests on and it holds. The first is wrong.
+
+The kubelet puts the group in the supplementary set of each container's initial process. Descendants inherit it, and a descendant that calls `setgroups(2)` loses it. `gagent` starts such a descendant: running as root it gives a shell child `syscall.Credential{Uid, Gid}` carrying no groups (`gagent@757dd26:internal/workspace/shell/process_linux.go:174-182`), which Go executes as `setgroups(0, NULL)` (`syscall/exec_linux.go:491-497`, go1.26.0).
+
+Measured on kubelet v1.36.3, in a Pod carrying `fsGroup` 65532 with the credentials volume mounted as this decision specifies. The container's initial process reports `groups=[0 10 65532]` and reads the credential; a child spawned that way reports `groups=[]` and is refused it.
+
+The decision stands. The credential is read by the container's initial process, which is the agent, and reaching that process is what the group was chosen for. What does not follow from it is that a file this mechanism delivers group-readable is readable by everything the Pod goes on to run.
+
+Falsified on issue #57.
