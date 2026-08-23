@@ -32,7 +32,8 @@ These are documentation too.
 
 - English and Markdown. The H1 takes the case of what it is — a name in title case, an exact file or repository name as spelled, a statement in sentence case (an ADR's H1 states its decision). Every heading below it is sentence case.
 - Start each file with one line stating what it governs.
-- A file past ~50 lines opens with a `## Contents` list of its section headings; a shorter one does not. A Contents list is never the remedy for a file that has outgrown one topic — see §Keep it maintainable.
+- A `## Contents` list indexes a file's `##` headings, so how many of them there are decides whether it carries one and the file's length does not: more than eight, it opens with the list; three or fewer, it carries none; between the two, the writer decides. A Contents list is never the remedy for a file that has outgrown one topic — see §Keep it maintainable.
+- A file whose headings come from a template owes no Contents list, however many it has. Those headings are the same in every file written from that template, so listing them tells a reader only what the template already told them.
 - **No decoration.** No emojis, badges, or ornamental headers. Nothing these rules reach is held to a looser standard: a check-mark glyph in a table is decoration where `yes` is a word.
 - Use file paths (`src/auth/service.ts`) instead of drawn hierarchies.
 - File names: lowercase kebab-case (`runtime-safety.md`). Uppercase is reserved for files a tool or a reader looks for by an exact name it did not choose: `README.md`, `AGENTS.md`, `CLAUDE.md`, and the names GitHub requires under `.github/`.
