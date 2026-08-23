@@ -22,7 +22,7 @@ What makes documentation valid in this project. Applies to every Markdown docume
 
 ## GitHub artifacts
 
-Issues, PRs, and comments are documentation too.
+These are documentation too.
 
 - **Facts only.** No rhetoric, no self-assessment, no inflated language ("perfect", "massive improvement"). State what changed, where, and why.
 - **Stay inside the template.** No extra sections beyond the template fields; leave no field empty — write `N/A` with a reason.
@@ -33,6 +33,6 @@ Issues, PRs, and comments are documentation too.
 - English and Markdown. The H1 takes the case of what it is — a name in title case, an exact file or repository name as spelled, a statement in sentence case (an ADR's H1 states its decision). Every heading below it is sentence case.
 - Start each file with one line stating what it governs.
 - A file past ~50 lines opens with a `## Contents` list of its section headings; a shorter one does not. A Contents list is never the remedy for a file that has outgrown one topic — see §Keep it maintainable.
-- **No decoration.** No emojis, badges, or ornamental headers. This holds for files under `docs/` as much as for GitHub artifacts: a check-mark glyph in a table is decoration where `yes` is a word.
+- **No decoration.** No emojis, badges, or ornamental headers. Nothing these rules reach is held to a looser standard: a check-mark glyph in a table is decoration where `yes` is a word.
 - Use file paths (`src/auth/service.ts`) instead of drawn hierarchies.
 - File names: lowercase kebab-case (`runtime-safety.md`). Uppercase is reserved for files a tool or a reader looks for by an exact name it did not choose: `README.md`, `AGENTS.md`, `CLAUDE.md`, and the names GitHub requires under `.github/`.

@@ -12,11 +12,11 @@ Rules every agent follows when writing code, tests, commits, and documents. The 
 
 ## Scope
 
-These rules bind what the project writes. A committed file a generator produced is not that — the project owns the input and the decision to commit it, not the output's internals.
+These rules bind what the project writes. Committed output a generator produced is not that — the project owns the input and the decision to commit it, not the output's internals.
 
 Where a tool decides an artifact's shape, that shape is an interface and not prose: a comment a tool writes into or parses, a template a forge copies into every issue and pull request opened from it, a file a runtime includes. What such an artifact says is the project's and is bound by these rules. What it must open with, and the order its parts come in, is the tool's.
 
-What makes a file generated is that regenerating it changes nothing. One nobody can regenerate is authored, whatever its header says.
+What makes anything generated is that regenerating it changes nothing. What nobody can regenerate is authored, whatever its header says. The test runs on what a generator writes and not on the file holding it, so one file can be generated in one part and authored in the rest.
 
 ## Stack-neutral
 
@@ -34,7 +34,7 @@ What makes a file generated is that regenerating it changes nothing. One nobody 
 
 Every project keeps all of these. They are the floor, and bootstrap prunes only the tables below.
 
-Selection is not once. A change that alters the project's stack or its structure carries the selection with it — the file that now matches added, the one that no longer does dropped, in the same pull request. A worker whose change triggers a selection does not make it.
+Selection is not once. A change that alters the project's stack carries the selection with it — the file that now matches added, the one that no longer does dropped, in the same pull request. A worker whose change triggers a selection does not make it.
 
 ## Stack-specific
 
