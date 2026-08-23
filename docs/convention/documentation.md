@@ -1,6 +1,6 @@
 # Documentation Conventions
 
-What makes documentation valid in this project. Applies to every file under `docs/` and to GitHub artifacts (issues, PRs, comments). Violations are grounds for PR rejection.
+What makes documentation valid in this project. Applies to every Markdown document in this repository, and to GitHub artifacts (issues, PRs, comments). Violations are grounds for PR rejection.
 
 ## Keep it maintainable
 
