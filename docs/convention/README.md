@@ -12,7 +12,9 @@ Rules every agent follows when writing code, tests, commits, and documents. The 
 
 ## Scope
 
-These rules bind what the project writes. A committed file a generator produced is not that — the project owns the input and the decision to commit it, not the output's internals — and neither is a comment a tool writes into, which is an interface rather than prose.
+These rules bind what the project writes. A committed file a generator produced is not that — the project owns the input and the decision to commit it, not the output's internals.
+
+Where a tool decides an artifact's shape, that shape is an interface and not prose: a comment a tool writes into or parses, a template a forge copies into every issue and pull request opened from it, a file a runtime includes. What such an artifact says is the project's and is bound by these rules. What it must open with, and the order its parts come in, is the tool's.
 
 What makes a file generated is that regenerating it changes nothing. One nobody can regenerate is authored, whatever its header says.
 
@@ -72,3 +74,5 @@ Reading a convention file is enough to apply its rules. Where the Extends column
 3. This index.
 
 On conflict, the more specific rule wins. Report conflicts to the PM in the PR description — do not resolve them yourself.
+
+§Scope is not a tier in this ladder. It bounds what every tier reaches, so no rule at any rank reaches what §Scope places outside what the project writes.

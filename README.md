@@ -2,6 +2,14 @@
 
 A Kubernetes operator that runs `gagent` agent workloads in a cluster from a custom resource.
 
+## Contents
+- What it does
+- Status
+- Requirements
+- Running the checks
+- Running the operator
+- Rules
+
 ## What it does
 
 The operator's purpose is to take an agent's desired configuration, hold it as a custom resource, and reconcile the cluster until that agent is running as a Pod.
