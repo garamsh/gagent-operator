@@ -33,3 +33,4 @@ Current architecture of the system and the decisions behind it. This file is the
 | `adr/0004-extend-stack-go.md` | Extend `stack-go.md` instead of replacing it | accepted |
 | `adr/0005-statefulset-of-one.md` | Run an agent as a StatefulSet of one replica | accepted |
 | `adr/0006-credential-group.md` | Carry credential access on a group, not on a user | accepted |
+| `adr/0007-claim-definitions-from-a-poller.md` | Claim garam's definitions from a poller beside the reconciler | accepted |

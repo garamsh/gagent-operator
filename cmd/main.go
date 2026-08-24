@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -21,6 +22,7 @@ import (
 
 	agentv1alpha1 "github.com/garamsh/gagent-operator/api/v1alpha1"
 	"github.com/garamsh/gagent-operator/internal/controller"
+	"github.com/garamsh/gagent-operator/internal/garam"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -45,6 +47,8 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var garamAddress, garamCertificateFile, garamKeyFile, garamTrustFile string
+	var garamPollInterval time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -63,6 +67,17 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&garamAddress, "garam-address", "",
+		"The host and port of garam's machine listener. Unset leaves this operator reading no definitions.")
+	flag.StringVar(&garamCertificateFile, "garam-certificate-file", "",
+		"The file holding the certificate this operator authenticates to garam with.")
+	flag.StringVar(&garamKeyFile, "garam-key-file", "",
+		"The file holding the private key of the certificate this operator authenticates to garam with.")
+	flag.StringVar(&garamTrustFile, "garam-trust-file", "",
+		"The file holding what garam's machine listener is verified against. This is not the organization "+
+			"issuer an operator's own certificate arrives with.")
+	flag.DurationVar(&garamPollInterval, "garam-poll-interval", time.Minute,
+		"How often this operator reads the definitions garam holds for it.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -170,6 +185,21 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	if garamAddress != "" {
+		tlsConfig, err := garam.MutualTLS(garamCertificateFile, garamKeyFile, garamTrustFile)
+		if err != nil {
+			setupLog.Error(err, "Failed to configure the connection to garam")
+			os.Exit(1)
+		}
+		poller := garam.NewPoller(garam.NewClient(garamAddress, tlsConfig), garamPollInterval)
+		if err := mgr.Add(poller); err != nil {
+			setupLog.Error(err, "Failed to add the garam poller", "address", garamAddress)
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("Reading no definitions: garam-address is unset")
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up health check")

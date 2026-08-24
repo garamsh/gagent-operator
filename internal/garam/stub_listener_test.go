@@ -1,0 +1,145 @@
+package garam_test
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+)
+
+// stubListener stands in for garam's machine listener: it terminates TLS with a
+// certificate of its own and requires a client certificate as garam's does
+// (garam@8f9dd9d:internal/machine/listener.go:24-29), and records what each
+// request asked for and authenticated as.
+type stubListener struct {
+	server *httptest.Server
+
+	// trustFile holds the certificate this listener presents, which is what a
+	// client verifies it against.
+	trustFile string
+
+	mu   sync.Mutex
+	seen []stubRequest
+}
+
+// stubRequest is one request the stub listener served.
+type stubRequest struct {
+	method string
+	path   string
+
+	// client is the common name of the certificate the request presented.
+	client string
+}
+
+// newStubListener starts a listener serving handler and stops it with the test.
+func newStubListener(t *testing.T, handler http.HandlerFunc) *stubListener {
+	t.Helper()
+
+	dir := t.TempDir()
+	certificatePEM, keyPEM := newCertificate(t, "garam-machine")
+	certificate, err := tls.X509KeyPair(certificatePEM, keyPEM)
+	if err != nil {
+		t.Fatalf("load the stub listener's certificate: %v", err)
+	}
+
+	stub := &stubListener{trustFile: writeFile(t, dir, "trust.pem", certificatePEM)}
+	stub.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		stub.record(r)
+		handler(w, r)
+	}))
+	stub.server.TLS = &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{certificate},
+		ClientAuth:   tls.RequireAnyClientCert,
+	}
+	stub.server.StartTLS()
+	t.Cleanup(stub.server.Close)
+
+	return stub
+}
+
+// address is the host and port the stub listener answers on.
+func (s *stubListener) address() string {
+	return s.server.Listener.Addr().String()
+}
+
+// requests is what the stub listener has served so far.
+func (s *stubListener) requests() []stubRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]stubRequest(nil), s.seen...)
+}
+
+func (s *stubListener) record(r *http.Request) {
+	request := stubRequest{method: r.Method, path: r.URL.Path}
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		request.client = r.TLS.PeerCertificates[0].Subject.CommonName
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seen = append(s.seen, request)
+}
+
+// newCertificate mints a self-signed certificate under commonName, the shape
+// garam's listener presents today, and returns it and its key PEM-encoded.
+func newCertificate(t *testing.T, commonName string) (certificatePEM, keyPEM []byte) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate a key for %s: %v", commonName, err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: commonName},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("mint a certificate for %s: %v", commonName, err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal the key for %s: %v", commonName, err)
+	}
+
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+}
+
+// writeIdentity writes a certificate under commonName and its key into dir, and
+// returns their paths. Called twice with one dir it replaces what is there,
+// which is how a renewed certificate reaches a running operator.
+func writeIdentity(t *testing.T, dir, commonName string) (certificateFile, keyFile string) {
+	t.Helper()
+
+	certificatePEM, keyPEM := newCertificate(t, commonName)
+	return writeFile(t, dir, "certificate.pem", certificatePEM), writeFile(t, dir, "key.pem", keyPEM)
+}
+
+func writeFile(t *testing.T, dir, name string, content []byte) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
