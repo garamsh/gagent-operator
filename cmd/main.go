@@ -2,8 +2,10 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"os"
+	"path/filepath"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -11,6 +13,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -23,6 +26,7 @@ import (
 	agentv1alpha1 "github.com/garamsh/gagent-operator/api/v1alpha1"
 	"github.com/garamsh/gagent-operator/internal/controller"
 	"github.com/garamsh/gagent-operator/internal/garam"
+	"github.com/garamsh/gagent-operator/internal/garam/credentialstore"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -30,6 +34,11 @@ var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 )
+
+// podNamespaceVariable names the environment variable the manager's Pod carries
+// its own namespace in, which is where the Secret holding this operator's
+// credential is looked for.
+const podNamespaceVariable = "POD_NAMESPACE"
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -48,7 +57,8 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var garamAddress, garamCertificateFile, garamKeyFile, garamTrustFile string
-	var garamPollInterval time.Duration
+	var garamCredentialSecret string
+	var garamPollInterval, garamRenewalInterval time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -78,6 +88,11 @@ func main() {
 			"issuer an operator's own certificate arrives with.")
 	flag.DurationVar(&garamPollInterval, "garam-poll-interval", time.Minute,
 		"How often this operator reads the definitions garam holds for it.")
+	flag.StringVar(&garamCredentialSecret, "garam-credential-secret", "",
+		"The Secret in this Pod's own namespace holding the certificate and key named above, "+
+			"which a renewal is written back to. Unset leaves this operator renewing nothing.")
+	flag.DurationVar(&garamRenewalInterval, "garam-renewal-interval", time.Hour,
+		"How often this operator asks garam to replace the certificate it authenticates with.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -192,10 +207,33 @@ func main() {
 			setupLog.Error(err, "Failed to configure the connection to garam")
 			os.Exit(1)
 		}
-		poller := garam.NewPoller(garam.NewClient(garamAddress, tlsConfig), garamPollInterval)
-		if err := mgr.Add(poller); err != nil {
+		garamClient := garam.NewClient(garamAddress, tlsConfig)
+		if err := mgr.Add(garam.NewPoller(garamClient, garamPollInterval)); err != nil {
 			setupLog.Error(err, "Failed to add the garam poller", "address", garamAddress)
 			os.Exit(1)
+		}
+		if garamCredentialSecret != "" {
+			// The namespace is the Pod's own and arrives on the downward API:
+			// the deployment cannot state it in an argument, because the
+			// kustomize transformer that sets the namespace does not reach
+			// into one.
+			namespace := os.Getenv(podNamespaceVariable)
+			if namespace == "" {
+				setupLog.Error(errors.New(podNamespaceVariable+" is unset"),
+					"Failed to add the garam renewer", "secret", garamCredentialSecret)
+				os.Exit(1)
+			}
+			// The Secret's keys are the names the kubelet gives the files in
+			// the volume, which is what the two flags above already point at.
+			store := credentialstore.NewSecret(mgr.GetClient(),
+				types.NamespacedName{Namespace: namespace, Name: garamCredentialSecret},
+				filepath.Base(garamCertificateFile), filepath.Base(garamKeyFile))
+			if err := mgr.Add(garam.NewRenewer(garamClient, store, garamRenewalInterval)); err != nil {
+				setupLog.Error(err, "Failed to add the garam renewer", "secret", garamCredentialSecret)
+				os.Exit(1)
+			}
+		} else {
+			setupLog.Info("Renewing nothing: garam-credential-secret is unset")
 		}
 	} else {
 		setupLog.Info("Reading no definitions: garam-address is unset")

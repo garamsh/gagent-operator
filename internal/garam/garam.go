@@ -43,3 +43,27 @@ type Assignment struct {
 // answers. A definition is claimed once and a second claim is a conflict rather
 // than an override, so retrying one changes nothing.
 var ErrClaimConflict = errors.New("garam holds a claim on this agent already")
+
+// Credential is what this operator authenticates to garam as: the certificate
+// and the private key it was issued with. garam stores no private key, so a
+// renewal answers with one once and there is no second chance to read it.
+type Credential struct {
+	// CertificatePEM is the certificate, PEM-encoded.
+	CertificatePEM []byte
+
+	// KeyPEM is the private key it was issued with, PEM-encoded.
+	KeyPEM []byte
+}
+
+// ErrRenewalTooEarly is what garam answers a renewal it admits no sooner. The
+// window opens once two thirds of the presented certificate's own validity has
+// passed, so this reports a clock rather than a fault and the next attempt is
+// the whole of the remedy.
+var ErrRenewalTooEarly = errors.New("garam admits no renewal of this certificate yet")
+
+// ErrCredentialSuperseded is what garam answers a renewal of a certificate it
+// has already replaced. garam renews the certificate it last issued this
+// operator and no other, so the one presented is now outside that lineage: it
+// authenticates until it expires and no retry recovers it, because only a mint
+// out of band takes the lineage back.
+var ErrCredentialSuperseded = errors.New("garam has issued a newer certificate for this operator already")
