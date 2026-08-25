@@ -31,7 +31,7 @@ type AgentReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=agent.garam.sh,resources=agents,verbs=get;list;watch
-// +kubebuilder:rbac:groups=agent.garam.sh,resources=agents/status,verbs=update
+// +kubebuilder:rbac:groups=agent.garam.sh,resources=agents/status,verbs=patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
@@ -47,7 +47,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, fmt.Errorf("get agent: %w", err)
 	}
 
-	held := *agent.Status.DeepCopy()
+	held := agent.DeepCopy()
 
 	if err := r.reconcileWorkload(ctx, &agent); err != nil {
 		return ctrl.Result{}, err
