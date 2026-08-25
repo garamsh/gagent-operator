@@ -60,7 +60,7 @@ func main() {
 	var enableHTTP2 bool
 	var garamAddress, garamCertificateFile, garamKeyFile, garamTrustFile string
 	var garamCredentialSecret string
-	var agentImage, agentStorageSize string
+	var agentImage, agentStorageSize, agentCopyImage string
 	var garamPollInterval, garamRenewalInterval time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -102,6 +102,11 @@ func main() {
 	flag.StringVar(&agentStorageSize, "agent-storage-size", "",
 		"The size of the volume every agent this operator constructs keeps its state on, as a Kubernetes "+
 			"quantity. Required where garam-address is set.")
+	flag.StringVar(&agentCopyImage, "agent-copy-image", "",
+		"The image the init container of every agent's Pod runs to copy that agent's credential into the "+
+			"volume the agent reads it from. It needs a shell and install, and nothing of the agent. It has "+
+			"no default and is always required: an agent whose credential arrives any other way is one its "+
+			"reader refuses.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -201,9 +206,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Every agent's Pod carries the init container this image runs, so an
+	// operator without one builds no workload at all. Refusing to start says so
+	// once, where a workload built without it would say nothing until its
+	// reader refused the credential.
+	if agentCopyImage == "" {
+		setupLog.Error(errors.New("agent-copy-image is required"),
+			"Failed to configure the workload an Agent is built into")
+		os.Exit(1)
+	}
+
 	if err := (&controller.AgentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		CopyImage: agentCopyImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "agent")
 		os.Exit(1)

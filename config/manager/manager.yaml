@@ -68,6 +68,12 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          # The image the init container of every agent's Pod copies that
+          # agent's credential with. The manager has no default for it, so this
+          # base names one; an overlay that prefers another replaces the
+          # argument. Pinned to the multi-platform index digest, because a tag
+          # can be moved to different content.
+          - --agent-copy-image=busybox:stable-musl@sha256:3c6ae8008e2c2eedd141725c30b20d9c36b026eb796688f88205845ef17aa213
         image: controller:latest
         name: manager
         env:

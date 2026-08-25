@@ -23,6 +23,11 @@ import (
 type AgentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// CopyImage is the image the init container runs that copies an agent's
+	// credential out of the volume the kubelet projects it into and into the one
+	// the agent reads. It needs a shell and install, and nothing of the agent.
+	CopyImage string
 }
 
 // +kubebuilder:rbac:groups=agent.garam.sh,resources=agents,verbs=get;list;watch
