@@ -35,3 +35,4 @@ Current architecture of the system and the decisions behind it. This file is the
 | `adr/0006-credential-group.md` | Carry credential access on a group, not on a user | accepted |
 | `adr/0007-claim-definitions-from-a-poller.md` | Claim garam's definitions from a poller beside the reconciler | accepted |
 | `adr/0008-renew-the-operator-credential-into-the-secret-it-is-read-from.md` | Renew the operator's credential into the Secret it is read from | accepted |
+| `adr/0009-construct-a-claimed-agent-from-the-operators-own-configuration.md` | Construct a claimed agent from the operator's own configuration, and place the credential the claim admits it to | accepted |

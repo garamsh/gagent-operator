@@ -2,8 +2,11 @@ package garam_test
 
 import (
 	"context"
+	"errors"
+	"maps"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,12 +29,61 @@ const (
 	unclaimedAgent = garam.GRN("grn:acme:default:agent:9f2ac1b40d8e7a35")
 )
 
+// recordingConstructor stands in for the cluster this operator constructs into,
+// which is the module boundary a Poller is written against. It builds the Agent
+// before it places the credential, as the constructor does, so that a refused
+// placement leaves the two apart the way a real one would.
+type recordingConstructor struct {
+	mu sync.Mutex
+
+	// built is the agents the cluster carries an Agent for.
+	built map[garam.GRN]bool
+
+	// placed is the agents whose credential the cluster already carries.
+	placed map[garam.GRN]garam.AgentCredential
+
+	// refusePlacement is what Construct answers instead of placing the
+	// credential, where it is set.
+	refusePlacement error
+}
+
+func newRecordingConstructor() *recordingConstructor {
+	return &recordingConstructor{built: map[garam.GRN]bool{}, placed: map[garam.GRN]garam.AgentCredential{}}
+}
+
+func (c *recordingConstructor) HasCredential(_ context.Context, agent garam.GRN) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, placed := c.placed[agent]
+	return placed, nil
+}
+
+func (c *recordingConstructor) Construct(_ context.Context, agent garam.GRN, credential garam.AgentCredential) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.built[agent] = true
+	if c.refusePlacement != nil {
+		return c.refusePlacement
+	}
+	c.placed[agent] = credential
+	return nil
+}
+
+// credentials is what the constructor holds, by agent.
+func (c *recordingConstructor) credentials() map[garam.GRN]garam.AgentCredential {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	held := map[garam.GRN]garam.AgentCredential{}
+	maps.Copy(held, c.placed)
+	return held
+}
+
 // runPoller polls stub until the test ends, and fails the test where Start
 // answers an error rather than stopping quietly.
-func runPoller(t *testing.T, stub *stubListener) {
+func runPoller(t *testing.T, stub *stubListener, constructor garam.Constructor) {
 	t.Helper()
 
-	poller := garam.NewPoller(garam.NewClient(stub.address(), trustedBy(t, stub)), pollInterval)
+	poller := garam.NewPoller(garam.NewClient(stub.address(), trustedBy(t, stub)), constructor, pollInterval)
 	ctx, cancel := context.WithCancel(logf.IntoContext(context.Background(), testr.New(t)))
 	stopped := make(chan struct{})
 	go func() {
@@ -50,11 +102,48 @@ func runPoller(t *testing.T, stub *stubListener) {
 func claims(stub *stubListener) []string {
 	var agents []string
 	for _, request := range stub.requests() {
-		if request.method == http.MethodPost {
+		if request.method == http.MethodPost && strings.HasSuffix(request.path, "/claim") {
 			agents = append(agents, strings.TrimSuffix(strings.TrimPrefix(request.path, "/definitions/"), "/claim"))
 		}
 	}
 	return agents
+}
+
+// certificatesAsked is the agents the stub was asked for a certificate for, in
+// the order it was asked.
+func certificatesAsked(stub *stubListener) []string {
+	var agents []string
+	for _, request := range stub.requests() {
+		if request.method == http.MethodPost && strings.HasSuffix(request.path, "/certificate") {
+			agents = append(agents, strings.TrimSuffix(strings.TrimPrefix(request.path, "/agents/"), "/certificate"))
+		}
+	}
+	return agents
+}
+
+// answerDefinitionsAndCertificates serves definitions and the certificate route
+// the way garam's listener does, and refuses a certificate for notHeld with the
+// 403 garam answers an agent this operator does not hold.
+func answerDefinitionsAndCertificates(definitions string, notHeld garam.GRN) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			answerJSON(w, http.StatusOK, definitions)
+		case strings.HasSuffix(r.URL.Path, "/certificate"):
+			if notHeld != "" && strings.Contains(r.URL.Path, string(notHeld)) {
+				answerJSON(w, http.StatusForbidden,
+					`{"kind": "permission_denied", "message": "agent is not assigned to this operator"}`)
+				return
+			}
+			answerJSON(w, http.StatusCreated, `{
+				"grn": "x", "certificatePem": "a certificate", "privateKeyPem": "a key",
+				"issuerPem": "an issuer", "serverRootPem": "a root", "notAfter": "2026-08-26T15:01:43Z"
+			}`)
+		default:
+			answerJSON(w, http.StatusCreated, `{"grn": "x",
+				"operator": "grn:acme:default:operator:one", "epoch": 1}`)
+		}
+	}
 }
 
 func TestPollerClaimsTheDefinitionsGaramHoldsNoClaimFor(t *testing.T) {
@@ -71,7 +160,7 @@ func TestPollerClaimsTheDefinitionsGaramHoldsNoClaimFor(t *testing.T) {
 			"operator": "grn:acme:default:operator:one", "epoch": 1}`)
 	})
 
-	runPoller(t, stub)
+	runPoller(t, stub, newRecordingConstructor())
 
 	g.Eventually(func() []string { return claims(stub) }, pollTimeout).Should(ContainElement(string(unclaimedAgent)))
 	g.Consistently(func() []string { return claims(stub) }, 10*pollInterval).
@@ -94,7 +183,7 @@ func TestPollerKeepsPollingAfterAReadThatFailed(t *testing.T) {
 			"operator": "grn:acme:default:operator:one", "epoch": 1}`)
 	})
 
-	runPoller(t, stub)
+	runPoller(t, stub, newRecordingConstructor())
 
 	g.Eventually(func() []string { return claims(stub) }, pollTimeout).Should(ContainElement(string(unclaimedAgent)))
 }
@@ -118,7 +207,7 @@ func TestPollerClaimsTheNextDefinitionAfterAClaimRefusedAsAConflict(t *testing.T
 			"operator": "grn:acme:default:operator:one", "epoch": 1}`)
 	})
 
-	runPoller(t, stub)
+	runPoller(t, stub, newRecordingConstructor())
 
 	g.Eventually(func() []string { return claims(stub) }, pollTimeout).Should(ContainElement(string(unclaimedAgent)))
 }
@@ -127,7 +216,8 @@ func TestPollerStopsWhenItsContextIsCancelled(t *testing.T) {
 	g := NewWithT(t)
 	stub := newStubListener(t, answerNoDefinitions)
 
-	poller := garam.NewPoller(garam.NewClient(stub.address(), trustedBy(t, stub)), pollInterval)
+	poller := garam.NewPoller(garam.NewClient(stub.address(), trustedBy(t, stub)),
+		newRecordingConstructor(), pollInterval)
 	ctx, cancel := context.WithCancel(logf.IntoContext(context.Background(), testr.New(t)))
 	stopped := make(chan error, 1)
 	go func() { stopped <- poller.Start(ctx) }()
@@ -135,4 +225,89 @@ func TestPollerStopsWhenItsContextIsCancelled(t *testing.T) {
 	g.Eventually(func() []stubRequest { return stub.requests() }, pollTimeout).ShouldNot(BeEmpty())
 	cancel()
 	g.Eventually(stopped, pollTimeout).Should(Receive(BeNil()))
+}
+
+// TestPollerConstructsTheAgentsItHoldsAClaimOn says construction is driven by
+// every definition this operator holds and not only by the pass that claimed
+// one: garam reports a claim for as long as the definition exists, so a poller
+// that constructed only on a fresh claim would build nothing after a restart.
+func TestPollerConstructsTheAgentsItHoldsAClaimOn(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, answerDefinitionsAndCertificates(`[
+		{"agentGrn": "`+string(claimedAgent)+`", "values": {}, "claim": {"epoch": 1}},
+		{"agentGrn": "`+string(unclaimedAgent)+`", "values": {}}
+	]`, ""))
+	constructor := newRecordingConstructor()
+
+	runPoller(t, stub, constructor)
+
+	g.Eventually(func() map[garam.GRN]garam.AgentCredential { return constructor.credentials() }, pollTimeout).
+		Should(HaveLen(2))
+	g.Expect(constructor.credentials()[claimedAgent]).To(Equal(garam.AgentCredential{
+		CertificatePEM: []byte("a certificate"),
+		KeyPEM:         []byte("a key"),
+		IssuerPEM:      []byte("an issuer"),
+		ServerRootPEM:  []byte("a root"),
+		NotAfter:       time.Date(2026, 8, 26, 15, 1, 43, 0, time.UTC),
+	}))
+}
+
+// TestPollerAsksForNoCertificateOnceTheCredentialIsPlaced is what keeps garam
+// from minting a private key every pass. garam generates one per certificate
+// and stores none, so a certificate asked for with nowhere to put it is key
+// material created and dropped.
+func TestPollerAsksForNoCertificateOnceTheCredentialIsPlaced(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, answerDefinitionsAndCertificates(
+		`[{"agentGrn": "`+string(claimedAgent)+`", "values": {}, "claim": {"epoch": 1}}]`, ""))
+	constructor := newRecordingConstructor()
+
+	runPoller(t, stub, constructor)
+
+	g.Eventually(func() []string { return certificatesAsked(stub) }, pollTimeout).
+		Should(ConsistOf(string(claimedAgent)))
+	g.Consistently(func() []string { return certificatesAsked(stub) }, 10*pollInterval).
+		Should(ConsistOf(string(claimedAgent)))
+}
+
+// TestPollerAsksAgainForACredentialItCouldNotStore is the write-before-obtained
+// rule. A credential that reached no store is gone: garam generates the private
+// key per certificate, keeps none, and has already moved on. So a failed write
+// is answered by asking for another certificate and never by holding the one in
+// hand across passes — a credential kept in this process to be retried is one
+// only this process has, and it goes with the process.
+func TestPollerAsksAgainForACredentialItCouldNotStore(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, answerDefinitionsAndCertificates(
+		`[{"agentGrn": "`+string(claimedAgent)+`", "values": {}, "claim": {"epoch": 1}}]`, ""))
+	constructor := newRecordingConstructor()
+	constructor.refusePlacement = errors.New("the API server refused the write")
+
+	runPoller(t, stub, constructor)
+
+	g.Eventually(func() int { return len(certificatesAsked(stub)) }, pollTimeout).
+		Should(BeNumerically(">=", 3))
+	g.Expect(constructor.credentials()).To(BeEmpty())
+}
+
+// TestPollerConstructsNothingForAnAgentGaramRefuses says a 403 stops
+// construction and stops nothing else. garam answers the same for an agent held
+// by another operator, for one this operator was replaced on, and for one that
+// does not exist, so there is nothing to tell apart and the next read of the
+// definitions is the whole of the response.
+func TestPollerConstructsNothingForAnAgentGaramRefuses(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, answerDefinitionsAndCertificates(`[
+		{"agentGrn": "`+string(claimedAgent)+`", "values": {}, "claim": {"epoch": 2}},
+		{"agentGrn": "`+string(unclaimedAgent)+`", "values": {}, "claim": {"epoch": 1}}
+	]`, claimedAgent))
+	constructor := newRecordingConstructor()
+
+	runPoller(t, stub, constructor)
+
+	// The agent garam answers for, so that the absence below is the refusal and
+	// not a poller that constructed nothing at all.
+	g.Eventually(func() map[garam.GRN]garam.AgentCredential { return constructor.credentials() }, pollTimeout).
+		Should(HaveKey(unclaimedAgent))
+	g.Expect(constructor.credentials()).NotTo(HaveKey(claimedAgent))
 }

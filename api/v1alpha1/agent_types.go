@@ -60,6 +60,15 @@ type AgentStatus struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// agent is the garam resource name of the agent this Agent was constructed
+	// for, and is empty on an Agent a user wrote. garam mints it when an
+	// organization defines an agent and this operator is admitted to it by
+	// claiming the definition, so it is reported here and never asked for in
+	// the spec.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	Agent string `json:"agent,omitempty"`
 }
 
 // ConditionSynced is the condition type reporting whether the cluster carries
