@@ -79,6 +79,45 @@ func (c *Client) ClaimDefinition(ctx context.Context, agent GRN) (Assignment, er
 	return answered.assignment()
 }
 
+// garam tells its refusals apart by kind rather than by status: a renewal
+// refused as too early and one refused as superseded are both answered 409
+// (garam@1150b88:internal/wire/error.go:16), and the two ask for opposite
+// things — wait, and mint out of band.
+const (
+	kindFailedPrecondition = "failed_precondition"
+	kindAlreadyExists      = "already_exists"
+)
+
+// RenewIdentity replaces the certificate this operator authenticates with, by
+// presenting the one it currently holds. The route names no subject: what is
+// replaced is what the connection authenticated as.
+//
+// A renewal garam admits no sooner answers [ErrRenewalTooEarly], and one of a
+// certificate it has already replaced answers [ErrCredentialSuperseded].
+//
+// The answer also carries the authority that signed the certificate and the
+// root garam is verified against. Neither is read here: what this operator
+// verifies garam against is the deployment's to supply, and moving it is not
+// this call's to do.
+func (c *Client) RenewIdentity(ctx context.Context) (Credential, error) {
+	var answered credentialPayload
+	err := c.send(ctx, http.MethodPost, "/identity/certificate", &answered)
+
+	var refused *refusal
+	if errors.As(err, &refused) {
+		switch refused.kind {
+		case kindFailedPrecondition:
+			return Credential{}, fmt.Errorf("renew the certificate this operator authenticates with: %w", ErrRenewalTooEarly)
+		case kindAlreadyExists:
+			return Credential{}, fmt.Errorf("renew the certificate this operator authenticates with: %w", ErrCredentialSuperseded)
+		}
+	}
+	if err != nil {
+		return Credential{}, fmt.Errorf("renew the certificate this operator authenticates with: %w", err)
+	}
+	return answered.credential()
+}
+
 // send performs one request against the machine listener and decodes what it
 // answered into out.
 func (c *Client) send(ctx context.Context, method, path string, out any) error {
@@ -167,4 +206,18 @@ func (p assignmentPayload) assignment() (Assignment, error) {
 		return Assignment{}, errors.New("an assignment garam answered names no agent or no operator")
 	}
 	return Assignment{Agent: GRN(p.GRN), Operator: GRN(p.Operator), Epoch: p.Epoch}, nil
+}
+
+// credentialPayload is a certificate and its key as the machine listener
+// answers them.
+type credentialPayload struct {
+	CertificatePEM string `json:"certificatePem"`
+	PrivateKeyPEM  string `json:"privateKeyPem"`
+}
+
+func (p credentialPayload) credential() (Credential, error) {
+	if p.CertificatePEM == "" || p.PrivateKeyPEM == "" {
+		return Credential{}, errors.New("a renewal garam answered carries no certificate or no key")
+	}
+	return Credential{CertificatePEM: []byte(p.CertificatePEM), KeyPEM: []byte(p.PrivateKeyPEM)}, nil
 }
