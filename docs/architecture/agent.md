@@ -45,6 +45,7 @@ The `agent.garam.sh` API group, the `Agent` kind it serves, and the controller t
 - A constructed agent is built in the namespace the manager runs in. That is what keeps the power to create a Secret to one namespace rather than to the cluster.
 - The agent GRN an `Agent` was constructed for is reported in `AgentStatus`, and is empty on an `Agent` a user wrote. `garam` is where a claim is durable — a read answers the claim state — so this operator can lose its status entirely and still learn what it holds.
 - The reconciler owns the StatefulSet through an owner reference and holds no finalizer: deleting the Agent is what removes the workload.
+- The poller and the reconciler both write an `Agent`'s status, and both write through a patch. The fields are disjoint — the poller reports the agent GRN, the reconciler the condition and the generation it was computed from — but the writes are not: an update carries the resource version the object was read at, so a report landing between a reconcile's read and its write is refused, and the reconcile fails on a race that resolves itself. A merge patch carries no resource version and names only the fields its writer decided, which is what makes disjoint fields disjoint writes. Measured on `garam-dev` on 2026-08-26, one report racing each of 40 reconciles: an update was refused 27 times and a patch none.
 - An Agent reports one condition, `Synced`: whether the cluster carries the workload the spec asks for, and the reason where it does not. `status.observedGeneration` says which generation that answer was computed from, so a status the controller has not caught up with is visible as one. A spec this controller cannot act on is reported there rather than returned as an error, because an error would requeue forever and say nothing on the object.
 - The object reports nothing about whether the agent is running. The controller does not read the workload's health, and a condition claiming readiness it has not observed would be worth less than none.
 
@@ -69,6 +70,8 @@ What a claimed definition becomes is [ADR 0009](adr/0009-construct-a-claimed-age
 The condition this API reports was settled on issue #14, and carries no ADR for the same kind of reason: its type and its reasons are constants in `api/v1alpha1`, and the field's own doc comment names them where a user of the API reads them.
 
 What the workload's security context carries was settled on issue #85 and carries no ADR: `restricted` is a published standard rather than a choice this project makes, and the four fields it asks for were left undecided by ADR 0006 on a ground — that each constrains what a user's image may be — which holds for one of them and not for the four. That one is left open below.
+
+That both writers of an `Agent`'s status patch was settled on issue #84, and carries no ADR because it changes no division: the poller reported the GRN before it and reports it now. What moved is the reconciler's write. It is recorded here because the reasoning that cleared the race in review — that disjoint fields do not race — was wrong, and the first live run is what found out; the next claim about which writes race on this object is to be tested against a cluster.
 
 ## Open questions
 

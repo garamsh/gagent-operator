@@ -25,7 +25,7 @@ rules:
   resources:
   - agents/status
   verbs:
-  - update
+  - patch
 - apiGroups:
   - apps
   resources:
