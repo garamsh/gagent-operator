@@ -17,28 +17,56 @@ import (
 )
 
 const (
-	agentContainerName    = "agent"
-	credentialsVolumeName = "credentials"
-	stateVolumeName       = "state"
+	agentContainerName = "agent"
 
-	credentialsMountPath = "/etc/gagent/credentials"
-	stateMountPath       = "/var/lib/gagent"
+	// credentialsContainerName is the init container that copies the projected
+	// credential into the volume the agent reads it from.
+	credentialsContainerName = "credentials"
 
-	// credentialsFileMode keeps the mounted credential files readable by the
+	credentialsVolumeName       = "credentials"
+	credentialsSecretVolumeName = "credentials-secret"
+	stateVolumeName             = "state"
+
+	// credentialsMountPath holds the copy the agent reads. credentialsSecretMountPath
+	// holds the projection the kubelet writes, and only the init container mounts it.
+	credentialsMountPath       = "/run/gagent/credentials"
+	credentialsSecretMountPath = "/etc/gagent/credentials"
+	stateMountPath             = "/var/lib/gagent"
+
+	// credentialsFileMode keeps the projected credential files readable by the
 	// group the Pod carries and by nothing else. A Secret volume's files are
-	// owned by root, so owner-only would leave them unreadable to an agent that
-	// drops root — which is what an agent image should do. Tightening it back to
-	// owner-only would not survive the kubelet anyway: where a Pod carries a
+	// owned by root, so owner-only would leave them unreadable to the init
+	// container that copies them, which does not run as root. Tightening it back
+	// to owner-only would not survive the kubelet anyway: where a Pod carries a
 	// group, it ORs group-read into every file it writes into the volume.
 	credentialsFileMode = 0o440
 
+	// credentialsCopyMode is the mode the copy carries. garam's reader refuses a
+	// key file any group or other bit is set on.
+	credentialsCopyMode = "0600"
+
 	// agentFSGroup is the group the kubelet gives every volume in the Pod and
-	// adds to the supplementary groups of every process in it. It is not the uid
-	// the image runs as and does not have to match it: a group is what carries
-	// the access, so the operator never has to know which user the agent image
-	// chose.
+	// adds to the supplementary groups of every process in it. It is what lets
+	// the init container read the projection and write the volume it copies into.
 	agentFSGroup = 65532
+
+	// agentRunAsUser is the user every container of the Pod runs as, so that the
+	// copy the init container makes is owned by the process that reads it. The
+	// operator names it rather than reading it off the image: an owner has to be
+	// one value for the whole Pod, and no image can be asked what the others run
+	// as.
+	agentRunAsUser = 65532
 )
+
+// copyCredentialsCommand copies each projected credential file into the volume
+// the agent reads, at a mode only its owner can reach. The glob skips the
+// kubelet's dot-prefixed bookkeeping entries and names no key, so a Secret whose
+// keys change does not change the workload.
+func copyCredentialsCommand() []string {
+	return []string{"/bin/sh", "-ec", fmt.Sprintf(
+		"for f in %s/*; do install -m %s \"$f\" %s/; done",
+		credentialsSecretMountPath, credentialsCopyMode, credentialsMountPath)}
+}
 
 // reconcileStatefulSet brings the StatefulSet an Agent describes into being, or
 // brings an existing one back to what the Agent's spec says, and returns it as
@@ -49,7 +77,7 @@ func (r *AgentReconciler) reconcileStatefulSet(ctx context.Context, agent *agent
 	}
 
 	operation, err := controllerutil.CreateOrUpdate(ctx, r.Client, statefulSet, func() error {
-		return applyAgent(agent, statefulSet, r.Scheme)
+		return applyAgent(agent, statefulSet, r.CopyImage, r.Scheme)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create or update statefulset: %w", err)
@@ -79,8 +107,9 @@ func claimedStorageSize(statefulSet *appsv1.StatefulSet) resource.Quantity {
 // applyAgent writes the fields an Agent's spec decides onto statefulSet and
 // leaves every other field as it found it, so that an unchanged Agent produces
 // an unchanged object. The fields a StatefulSet refuses a change to are written
-// at creation only.
-func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, scheme *runtime.Scheme) error {
+// at creation only. copyImage is the image the credential's init container runs
+// and comes from this operator's own configuration rather than from the Agent.
+func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, copyImage string, scheme *runtime.Scheme) error {
 	if statefulSet.CreationTimestamp.IsZero() {
 		labels := workloadLabels(agent)
 		statefulSet.Labels = labels
@@ -97,41 +126,65 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, sch
 		statefulSet.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{}
 	}
 	statefulSet.Spec.Template.Spec.SecurityContext.FSGroup = ptr.To[int64](agentFSGroup)
+	statefulSet.Spec.Template.Spec.SecurityContext.RunAsUser = ptr.To[int64](agentRunAsUser)
 
 	statefulSet.Spec.Template.Spec.Volumes = []corev1.Volume{{
-		Name: credentialsVolumeName,
+		Name: credentialsSecretVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
 				SecretName:  agent.Spec.CredentialsSecretName,
 				DefaultMode: ptr.To[int32](credentialsFileMode),
 			},
 		},
+	}, {
+		Name: credentialsVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			// Memory-backed, so the copy never reaches the node's disk, and
+			// bounded, because a memory volume that names no limit is bounded
+			// only by the node.
+			EmptyDir: &corev1.EmptyDirVolumeSource{
+				Medium:    corev1.StorageMediumMemory,
+				SizeLimit: resource.NewQuantity(1<<20, resource.BinarySI),
+			},
+		},
 	}}
 
-	container := containerNamed(&statefulSet.Spec.Template.Spec, agentContainerName)
+	credentials := containerNamed(&statefulSet.Spec.Template.Spec.InitContainers, credentialsContainerName)
+	credentials.Image = copyImage
+	credentials.Command = copyCredentialsCommand()
+	credentials.VolumeMounts = []corev1.VolumeMount{
+		{Name: credentialsSecretVolumeName, MountPath: credentialsSecretMountPath, ReadOnly: true},
+		{Name: credentialsVolumeName, MountPath: credentialsMountPath},
+	}
+
+	container := containerNamed(&statefulSet.Spec.Template.Spec.Containers, agentContainerName)
 	container.Image = agent.Spec.Image
 	container.Resources = agent.Spec.Resources
+	// The copy is not mounted read-only: the rule it satisfies has the reader
+	// owning the file, and garam's contract expects whatever refreshes a copy to
+	// do so in the Pod that reads it.
 	container.VolumeMounts = []corev1.VolumeMount{
-		{Name: credentialsVolumeName, MountPath: credentialsMountPath, ReadOnly: true},
+		{Name: credentialsVolumeName, MountPath: credentialsMountPath},
 		{Name: stateVolumeName, MountPath: stateMountPath},
 	}
 
 	return controllerutil.SetControllerReference(agent, statefulSet, scheme)
 }
 
-// containerNamed returns the container called name, appending an empty one when
-// the pod does not carry it yet. Writing through the returned pointer leaves the
-// fields the API server defaulted on an existing container alone.
-func containerNamed(pod *corev1.PodSpec, name string) *corev1.Container {
-	for i := range pod.Containers {
-		if pod.Containers[i].Name == name {
-			return &pod.Containers[i]
+// containerNamed returns the container called name out of containers, appending
+// an empty one when it does not carry it yet. Writing through the returned
+// pointer leaves the fields the API server defaulted on an existing container
+// alone.
+func containerNamed(containers *[]corev1.Container, name string) *corev1.Container {
+	for i := range *containers {
+		if (*containers)[i].Name == name {
+			return &(*containers)[i]
 		}
 	}
 
-	pod.Containers = append(pod.Containers, corev1.Container{Name: name})
+	*containers = append(*containers, corev1.Container{Name: name})
 
-	return &pod.Containers[len(pod.Containers)-1]
+	return &(*containers)[len(*containers)-1]
 }
 
 // stateClaim is the claim the agent's state volume is provisioned from.

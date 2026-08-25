@@ -5,7 +5,6 @@ package e2e
 import (
 	"fmt"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -28,9 +27,28 @@ const (
 	// nowhere in the container's environment.
 	credentialsToken = "e2e-token-6f1c9a"
 
-	credentialsMountPath = "/etc/gagent/credentials"
+	// credentialsMountPath is where the agent reads the copy the init container
+	// made, not where the kubelet projects the Secret.
+	credentialsMountPath = "/run/gagent/credentials"
 	stateMountPath       = "/var/lib/gagent"
 )
+
+// keyfileRule is the rule garam's reader applies to a key file, transcribed from
+// garam@1ff8346:internal/keyfile/keyfile.go:30-41: it refuses a file any group or
+// other permission bit is set on, and refuses one whose owner is not the reading
+// process. 63 is 0o077 in decimal, which sh arithmetic has no octal literal for.
+const keyfileRule = `
+check() {
+  perm=$(( 0$(stat -Lc '%a' "$1") ))
+  if [ $(( perm & 63 )) -ne 0 ]; then
+    echo "$2 REFUSE readable-beyond-its-owner"
+  elif [ "$(stat -Lc '%u' "$1")" != "$(id -u)" ]; then
+    echo "$2 REFUSE owned-by-another-user"
+  else
+    echo "$2 ACCEPT"
+  fi
+}
+`
 
 // agentManifest is the Agent under test. Its image is loaded onto the node by
 // the suite.
@@ -126,7 +144,7 @@ var _ = Describe("Agent workload", Ordered, func() {
 		}, time.Minute, time.Second).Should(Succeed())
 	})
 
-	It("mounts the credentials as files at the mode asked for, and nowhere in the environment", func() {
+	It("delivers the credential as a file the rule its reader applies accepts, and nowhere in the environment", func() {
 		waitForAgentPod()
 
 		// Everything below is about an agent that dropped root. Read as root, a
@@ -137,19 +155,19 @@ var _ = Describe("Agent workload", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(strings.TrimSpace(uid)).NotTo(Equal("0"))
 
-		By("reading the mode the StatefulSet asks for")
-		asked, err := kubectlIn("get", "statefulset", agentUnderTest,
-			"-o", "jsonpath={.spec.template.spec.volumes[?(@.name=='credentials')].secret.defaultMode}")
-		Expect(err).NotTo(HaveOccurred())
-		askedMode, err := strconv.Atoi(asked)
-		Expect(err).NotTo(HaveOccurred(), "the StatefulSet asks for no file mode")
-
-		By("reading the mode the file carries inside the container")
-		// stat without -L reports the mode of the symlink a Secret volume
-		// projects, which is 777 whatever the volume asked for.
-		mode, err := execInAgent("stat", "-Lc", "%a", credentialsMountPath+"/token")
+		By("applying garam's rule to the credential, and to a file written beside it")
+		// The control is the second file: written by this container, into a
+		// volume it can write, at the mode a default umask gives it. The rule only
+		// refuses, so a control it accepts would leave a check that cannot fail
+		// reading exactly like one that can.
+		verdicts, err := execInAgent("sh", "-ec", keyfileRule+
+			"umask 022\n"+
+			": > "+stateMountPath+"/control\n"+
+			"check "+credentialsMountPath+"/token credential\n"+
+			"check "+stateMountPath+"/control control\n")
 		Expect(err).NotTo(HaveOccurred(), "the credentials are not files inside the container")
-		Expect(strings.TrimSpace(mode)).To(Equal(strconv.FormatInt(int64(askedMode), 8)))
+		Expect(verdicts).To(ContainSubstring("credential ACCEPT"))
+		Expect(verdicts).To(ContainSubstring("control REFUSE readable-beyond-its-owner"))
 
 		By("reading the credential out of the file")
 		content, err := execInAgent("cat", credentialsMountPath+"/token")

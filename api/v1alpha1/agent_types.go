@@ -10,7 +10,10 @@ import (
 // AgentSpec defines the desired state of Agent
 type AgentSpec struct {
 	// image is the container image the agent runs. It has no default: name the
-	// image and the tag or digest to run explicitly.
+	// image and the tag or digest to run explicitly. It must run as uid 65532,
+	// which is the user every container of the agent's Pod is given: the agent's
+	// credential is delivered as a file that user owns, and the process that
+	// reads it is refused a file owned by anyone else.
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	Image string `json:"image"`

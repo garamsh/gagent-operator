@@ -80,11 +80,15 @@ func createAgent(agent *agentv1alpha1.Agent) {
 	})
 }
 
+// testCopyImage is what the specs expect on the credential's init container.
+const testCopyImage = "example.com/copy:v0.1.0"
+
 // reconcileAgent runs one reconcile for the named Agent.
 func reconcileAgent(name string) (reconcile.Result, error) {
 	reconciler := &AgentReconciler{
-		Client: k8sClient,
-		Scheme: k8sClient.Scheme(),
+		Client:    k8sClient,
+		Scheme:    k8sClient.Scheme(),
+		CopyImage: testCopyImage,
 	}
 
 	return reconciler.Reconcile(ctx, reconcile.Request{
