@@ -79,6 +79,27 @@ func (c *Client) ClaimDefinition(ctx context.Context, agent GRN) (Assignment, er
 	return answered.assignment()
 }
 
+// IssueAgentCertificate asks garam for the credential an agent authenticates
+// with. It answers for an agent assigned to this operator at the current epoch,
+// which is what the claim bought.
+//
+// An agent this operator does not hold answers [ErrAgentNotHeld]. The private
+// key comes back once and garam keeps none, so what this returns is not
+// obtainable again: store it before treating it as obtained.
+func (c *Client) IssueAgentCertificate(ctx context.Context, agent GRN) (AgentCredential, error) {
+	var answered agentCredentialPayload
+	err := c.send(ctx, http.MethodPost, "/agents/"+url.PathEscape(string(agent))+"/certificate", &answered)
+
+	var refused *refusal
+	if errors.As(err, &refused) && refused.status == http.StatusForbidden {
+		return AgentCredential{}, fmt.Errorf("issue a certificate for %s: %w", agent, ErrAgentNotHeld)
+	}
+	if err != nil {
+		return AgentCredential{}, fmt.Errorf("issue a certificate for %s: %w", agent, err)
+	}
+	return answered.agentCredential()
+}
+
 // garam tells its refusals apart by kind rather than by status: a renewal
 // refused as too early and one refused as superseded are both answered 409
 // (garam@1150b88:internal/wire/error.go:16), and the two ask for opposite
@@ -220,4 +241,30 @@ func (p credentialPayload) credential() (Credential, error) {
 		return Credential{}, errors.New("a renewal garam answered carries no certificate or no key")
 	}
 	return Credential{CertificatePEM: []byte(p.CertificatePEM), KeyPEM: []byte(p.PrivateKeyPEM)}, nil
+}
+
+// agentCredentialPayload is an agent's certificate as the machine listener
+// answers it.
+type agentCredentialPayload struct {
+	CertificatePEM string    `json:"certificatePem"`
+	PrivateKeyPEM  string    `json:"privateKeyPem"`
+	IssuerPEM      string    `json:"issuerPem"`
+	ServerRootPEM  string    `json:"serverRootPem"`
+	NotAfter       time.Time `json:"notAfter"`
+}
+
+func (p agentCredentialPayload) agentCredential() (AgentCredential, error) {
+	if p.CertificatePEM == "" || p.PrivateKeyPEM == "" || p.IssuerPEM == "" || p.ServerRootPEM == "" {
+		return AgentCredential{}, errors.New("a certificate garam issued an agent is missing one of its four PEMs")
+	}
+	if p.NotAfter.IsZero() {
+		return AgentCredential{}, errors.New("a certificate garam issued an agent carries no expiry")
+	}
+	return AgentCredential{
+		CertificatePEM: []byte(p.CertificatePEM),
+		KeyPEM:         []byte(p.PrivateKeyPEM),
+		IssuerPEM:      []byte(p.IssuerPEM),
+		ServerRootPEM:  []byte(p.ServerRootPEM),
+		NotAfter:       p.NotAfter,
+	}, nil
 }

@@ -148,6 +148,15 @@ spec:
           status:
             description: status defines the observed state of Agent
             properties:
+              agent:
+                description: |-
+                  agent is the garam resource name of the agent this Agent was constructed
+                  for, and is empty on an Agent a user wrote. garam mints it when an
+                  organization defines an agent and this operator is admitted to it by
+                  claiming the definition, so it is reported here and never asked for in
+                  the spec.
+                minLength: 1
+                type: string
               conditions:
                 description: |-
                   conditions report what the controller observed of this Agent. One type is

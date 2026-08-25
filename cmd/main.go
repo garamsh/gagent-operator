@@ -12,6 +12,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -26,6 +27,7 @@ import (
 	agentv1alpha1 "github.com/garamsh/gagent-operator/api/v1alpha1"
 	"github.com/garamsh/gagent-operator/internal/controller"
 	"github.com/garamsh/gagent-operator/internal/garam"
+	"github.com/garamsh/gagent-operator/internal/garam/constructor"
 	"github.com/garamsh/gagent-operator/internal/garam/credentialstore"
 	// +kubebuilder:scaffold:imports
 )
@@ -36,8 +38,8 @@ var (
 )
 
 // podNamespaceVariable names the environment variable the manager's Pod carries
-// its own namespace in, which is where the Secret holding this operator's
-// credential is looked for.
+// its own namespace in. It is where the Secret holding this operator's
+// credential is looked for, and where the agents it constructs are built.
 const podNamespaceVariable = "POD_NAMESPACE"
 
 func init() {
@@ -58,6 +60,7 @@ func main() {
 	var enableHTTP2 bool
 	var garamAddress, garamCertificateFile, garamKeyFile, garamTrustFile string
 	var garamCredentialSecret string
+	var agentImage, agentStorageSize string
 	var garamPollInterval, garamRenewalInterval time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -93,6 +96,12 @@ func main() {
 			"which a renewal is written back to. Unset leaves this operator renewing nothing.")
 	flag.DurationVar(&garamRenewalInterval, "garam-renewal-interval", time.Hour,
 		"How often this operator asks garam to replace the certificate it authenticates with.")
+	flag.StringVar(&agentImage, "agent-image", "",
+		"The container image every agent this operator constructs runs. It has no default: name the image "+
+			"and the tag or digest explicitly. Required where garam-address is set.")
+	flag.StringVar(&agentStorageSize, "agent-storage-size", "",
+		"The size of the volume every agent this operator constructs keeps its state on, as a Kubernetes "+
+			"quantity. Required where garam-address is set.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -207,22 +216,36 @@ func main() {
 			setupLog.Error(err, "Failed to configure the connection to garam")
 			os.Exit(1)
 		}
+		// The namespace is the Pod's own and arrives on the downward API: the
+		// deployment cannot state it in an argument, because the kustomize
+		// transformer that sets the namespace does not reach into one.
+		namespace := os.Getenv(podNamespaceVariable)
+		if namespace == "" {
+			setupLog.Error(errors.New(podNamespaceVariable+" is unset"),
+				"Failed to name the namespace this operator writes in")
+			os.Exit(1)
+		}
+		// Both flags are checked for having been given, and neither value for
+		// being usable: an image reference and a volume size are the API
+		// server's to refuse, and it says so on the object.
+		if agentImage == "" {
+			setupLog.Error(errors.New("agent-image is required where garam-address is set"),
+				"Failed to construct agents")
+			os.Exit(1)
+		}
+		storageSize, err := resource.ParseQuantity(agentStorageSize)
+		if err != nil {
+			setupLog.Error(err, "Failed to read agent-storage-size, which is required where garam-address is set",
+				"agent-storage-size", agentStorageSize)
+			os.Exit(1)
+		}
 		garamClient := garam.NewClient(garamAddress, tlsConfig)
-		if err := mgr.Add(garam.NewPoller(garamClient, garamPollInterval)); err != nil {
+		builder := constructor.NewAgent(mgr.GetClient(), mgr.GetScheme(), namespace, agentImage, storageSize)
+		if err := mgr.Add(garam.NewPoller(garamClient, builder, garamPollInterval)); err != nil {
 			setupLog.Error(err, "Failed to add the garam poller", "address", garamAddress)
 			os.Exit(1)
 		}
 		if garamCredentialSecret != "" {
-			// The namespace is the Pod's own and arrives on the downward API:
-			// the deployment cannot state it in an argument, because the
-			// kustomize transformer that sets the namespace does not reach
-			// into one.
-			namespace := os.Getenv(podNamespaceVariable)
-			if namespace == "" {
-				setupLog.Error(errors.New(podNamespaceVariable+" is unset"),
-					"Failed to add the garam renewer", "secret", garamCredentialSecret)
-				os.Exit(1)
-			}
 			// The Secret's keys are the names the kubelet gives the files in
 			// the volume, which is what the two flags above already point at.
 			store := credentialstore.NewSecret(mgr.GetClient(),

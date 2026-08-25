@@ -2,7 +2,10 @@
 // claims them.
 package garam
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // GRN is a garam resource name. This operator carries one and never reads
 // inside it: what its segments mean is garam's, and an identifier it minted is
@@ -38,6 +41,42 @@ type Assignment struct {
 	// Epoch rises with every assignment and fences the operator it replaced.
 	Epoch int64
 }
+
+// AgentCredential is what garam issues an agent: the certificate it
+// authenticates as, the private key it was issued with, the authority that
+// signed it, and the root it verifies garam's listener by.
+//
+// The last two are different certificates and are not interchangeable. garam is
+// verified against ServerRootPEM and against nothing else; IssuerPEM is the
+// authority that signed this certificate, which signs no listener
+// (garam@5130ca9:api/machine.yaml:467-479).
+type AgentCredential struct {
+	// CertificatePEM is the certificate, PEM-encoded.
+	CertificatePEM []byte
+
+	// KeyPEM is the private key it was issued with, PEM-encoded. garam stores
+	// none, so this arrives once and a holder that loses it asks for another
+	// certificate.
+	KeyPEM []byte
+
+	// IssuerPEM is the authority that signed the certificate, PEM-encoded.
+	IssuerPEM []byte
+
+	// ServerRootPEM is the root garam's listener is verified against,
+	// PEM-encoded.
+	ServerRootPEM []byte
+
+	// NotAfter is when the certificate stops being valid. garam answers it, so
+	// nothing here parses a PEM to learn it.
+	NotAfter time.Time
+}
+
+// ErrAgentNotHeld is what garam answers an agent this operator does not hold at
+// the current epoch. It answers the same for an agent assigned to another
+// operator, for one this operator was replaced on, and for one that does not
+// exist, so the three cannot be told apart: this reports "not mine right now"
+// and the next read of the definitions is the whole of the response.
+var ErrAgentNotHeld = errors.New("garam holds this agent for another operator, or holds no such agent")
 
 // ErrClaimConflict is what a claim of an agent garam already holds a claim for
 // answers. A definition is claimed once and a second claim is a conflict rather
