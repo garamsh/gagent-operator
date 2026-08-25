@@ -58,6 +58,17 @@ const (
 	agentRunAsUser = 65532
 )
 
+// containerSecurityContext is what every container of the agent's Pod carries.
+// It holds the two fields PodSecurity restricted asks of a container and nothing
+// else: readOnlyRootFilesystem is no part of that standard, and naming a user
+// here would take the Pod's own away from whichever container named it.
+func containerSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr.To(false),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
 // copyCredentialsCommand copies each projected credential file into the volume
 // the agent reads, at a mode only its owner can reach. The glob skips the
 // kubelet's dot-prefixed bookkeeping entries and names no key, so a Secret whose
@@ -125,8 +136,15 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 	if statefulSet.Spec.Template.Spec.SecurityContext == nil {
 		statefulSet.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{}
 	}
-	statefulSet.Spec.Template.Spec.SecurityContext.FSGroup = ptr.To[int64](agentFSGroup)
-	statefulSet.Spec.Template.Spec.SecurityContext.RunAsUser = ptr.To[int64](agentRunAsUser)
+	podSecurity := statefulSet.Spec.Template.Spec.SecurityContext
+	podSecurity.FSGroup = ptr.To[int64](agentFSGroup)
+	podSecurity.RunAsUser = ptr.To[int64](agentRunAsUser)
+	// Naming a user PodSecurity restricted would accept is not the same as
+	// asserting one: it reads runAsNonRoot and refuses a Pod that leaves it
+	// unset. Both fields sit here rather than on the containers because both are
+	// one value for the whole Pod.
+	podSecurity.RunAsNonRoot = ptr.To(true)
+	podSecurity.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 
 	statefulSet.Spec.Template.Spec.Volumes = []corev1.Volume{{
 		Name: credentialsSecretVolumeName,
@@ -152,6 +170,7 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 	credentials := containerNamed(&statefulSet.Spec.Template.Spec.InitContainers, credentialsContainerName)
 	credentials.Image = copyImage
 	credentials.Command = copyCredentialsCommand()
+	credentials.SecurityContext = containerSecurityContext()
 	credentials.VolumeMounts = []corev1.VolumeMount{
 		{Name: credentialsSecretVolumeName, MountPath: credentialsSecretMountPath, ReadOnly: true},
 		{Name: credentialsVolumeName, MountPath: credentialsMountPath},
@@ -160,6 +179,7 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 	container := containerNamed(&statefulSet.Spec.Template.Spec.Containers, agentContainerName)
 	container.Image = agent.Spec.Image
 	container.Resources = agent.Spec.Resources
+	container.SecurityContext = containerSecurityContext()
 	// The copy is not mounted read-only: the rule it satisfies has the reader
 	// owning the file, and garam's contract expects whatever refreshes a copy to
 	// do so in the Pod that reads it.

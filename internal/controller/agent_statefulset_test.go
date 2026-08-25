@@ -6,8 +6,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -172,9 +174,9 @@ var _ = Describe("Agent workload", func() {
 		))
 
 		By("letting neither container name a user of its own, which would leave the copy owned by somebody else")
-		Expect(credentials.SecurityContext).To(BeNil())
+		Expect(credentials.SecurityContext.RunAsUser).To(BeNil())
 		Expect(pod.Containers).To(HaveLen(1))
-		Expect(pod.Containers[0].SecurityContext).To(BeNil())
+		Expect(pod.Containers[0].SecurityContext.RunAsUser).To(BeNil())
 
 		By("giving the agent the copy and not the projection")
 		Expect(pod.Containers[0].VolumeMounts).To(ConsistOf(
@@ -182,7 +184,82 @@ var _ = Describe("Agent workload", func() {
 			corev1.VolumeMount{Name: stateVolumeName, MountPath: stateMountPath},
 		))
 	})
+
+	It("builds a Pod a namespace enforcing PodSecurity restricted admits, and would not without its security context", func() {
+		name := "satisfies-restricted"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		_, err := reconcileAgent(name)
+		Expect(err).NotTo(HaveOccurred())
+		namespace := restrictedNamespace("psa-" + name)
+
+		By("creating the Pod the StatefulSet describes, which the API server admits")
+		Expect(k8sClient.Create(ctx, podOf(statefulSetFor(name), namespace))).To(Succeed())
+
+		By("creating the same Pod without the four fields, which it refuses")
+		refused := podOf(statefulSetFor(name), namespace)
+		refused.Name += "-unhardened"
+		refused.Spec.SecurityContext.RunAsNonRoot = nil
+		refused.Spec.SecurityContext.SeccompProfile = nil
+		for i := range refused.Spec.InitContainers {
+			refused.Spec.InitContainers[i].SecurityContext = nil
+		}
+		for i := range refused.Spec.Containers {
+			refused.Spec.Containers[i].SecurityContext = nil
+		}
+		Expect(k8sClient.Create(ctx, refused)).
+			To(MatchError(ContainSubstring(`violates PodSecurity "restricted:latest"`)))
+	})
+
+	It("leaves the root filesystem of every container writable, which restricted does not ask for", func() {
+		name := "writes-its-own-filesystem"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		_, err := reconcileAgent(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		pod := statefulSetFor(name).Spec.Template.Spec
+		Expect(pod.InitContainers[0].SecurityContext.ReadOnlyRootFilesystem).To(BeNil())
+		Expect(pod.Containers[0].SecurityContext.ReadOnlyRootFilesystem).To(BeNil())
+	})
 })
+
+// restrictedNamespace creates a namespace enforcing PodSecurity restricted at
+// the version the API server is, and returns its name. It is not deleted:
+// envtest runs no namespace controller, so a deleted one stays Terminating and
+// refuses everything created in it afterwards.
+func restrictedNamespace(name string) string {
+	GinkgoHelper()
+
+	Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: name,
+		Labels: map[string]string{
+			"pod-security.kubernetes.io/enforce":         "restricted",
+			"pod-security.kubernetes.io/enforce-version": "latest",
+		},
+	}})).To(Succeed())
+
+	return name
+}
+
+// podOf is the Pod a StatefulSet's template describes, in namespace. The
+// StatefulSet controller is what turns a claim template into a volume and
+// envtest runs none, so the state volume is supplied here; PodSecurity reads an
+// emptyDir and a claim alike.
+func podOf(statefulSet *appsv1.StatefulSet, namespace string) *corev1.Pod {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: statefulSet.Name + "-0", Namespace: namespace},
+		Spec:       *statefulSet.Spec.Template.Spec.DeepCopy(),
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name:         stateVolumeName,
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	})
+
+	return pod
+}
 
 // volumeNamed returns the Pod's volume called name, and fails the spec where it
 // carries none.
