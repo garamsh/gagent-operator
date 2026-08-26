@@ -76,3 +76,17 @@ Harder, and this is what the decision gives up: **this operator becomes a writer
 Ruled out: **carrying every value through to the workload**, which makes `values` an open channel into an agent's process configuration and leaves ADR 0009's prohibition resting on nobody typing `image`. **A single encoded key** holding the whole tool set, which makes this operator parse or template a format it does not own. **Reading `tools-dir` from a definition**, which is the image decision wearing another name. **An environment variable for the pins**, measured to produce a fail-closed agent and an error naming the wrong party for as long as `gagent#745` stands. **A second object holding the tool set**, which buys a name and a permission for a value that is not secret. And **widening `Construct` to a `Definition` that still carries a raw map**, which would put a free-form map in the hands of the one writer of an agent's image.
 
 Not decided here: **which object renders the declaration into a file in the Pod.** It is not secret, so it needs neither a Secret nor ADR 0010's memory copy, and the choice is a mechanism the implementation issue makes. Not decided here either: **a second key family**, which arrives when a second setting is worth declaring, and **what an operator does with a key a later release would understand**, which is the same forward-compatibility question the ignore rule answers for now.
+
+## Errata
+
+### 2026-08-27 — a public pin set still takes a mode
+
+Decision rejects reusing ADR 0010's machinery with this: "a pin set is public, so it needs no copy off the projection and no mode only its owner can read." The first clause holds. The second does not follow from it and is wrong.
+
+`gagent` refuses its config file unless its owner alone can read it: `gagent@04ed05a:internal/config/config.go:294` requires it of the file it loaded, and `gagent@04ed05a:internal/config/owner_only.go` refuses every mode that grants a bit outside the owner. The pins are a `gagent` setting and resolve from that file — which is what this decision borrows the setting name for — so the file this decision creates does take a mode only its owner can read, and an agent handed one that does not refuses to start.
+
+The mode is not asked for secrecy, and that is why the first clause survives being read as deciding the second. `owner_only.go` gives the reason: the config file and the TLS key are the operator's material in the runtime user's domain, so a child running as the agent must not read them. It is the same management-ownership ground the environment road is refused on, arriving a second time at the file.
+
+The decision stands whole: the declaration reaches the workload as a file, the file is not a credential, and none of ADR 0010's memory-backed copy is taken — that half answers a rule about key material and a pin set is not key material. What does not follow from a file's contents being public is that the file needs no mode.
+
+Falsified on issue #96.
