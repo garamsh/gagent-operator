@@ -173,6 +173,7 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 	credentials := containerNamed(&statefulSet.Spec.Template.Spec.InitContainers, credentialsContainerName)
 	credentials.Image = copyImage
 	credentials.Command = copyCredentialsCommand()
+	credentials.SecurityContext = containerSecurityContext()
 	credentials.VolumeMounts = []corev1.VolumeMount{
 		{Name: credentialsSecretVolumeName, MountPath: credentialsSecretMountPath, ReadOnly: true},
 		{Name: credentialsVolumeName, MountPath: credentialsMountPath},
@@ -181,6 +182,7 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 	container := containerNamed(&statefulSet.Spec.Template.Spec.Containers, agentContainerName)
 	container.Image = agent.Spec.Image
 	container.Resources = agent.Spec.Resources
+	container.SecurityContext = containerSecurityContext()
 	// The copy is not mounted read-only: the rule it satisfies has the reader
 	// owning the file, and garam's contract expects whatever refreshes a copy to
 	// do so in the Pod that reads it.
