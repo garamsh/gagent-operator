@@ -38,3 +38,4 @@ Current architecture of the system and the decisions behind it. This file is the
 | `adr/0009-construct-a-claimed-agent-from-the-operators-own-configuration.md` | Construct a claimed agent from the operator's own configuration, and place the credential the claim admits it to | accepted |
 | `adr/0010-copy-an-agents-credential-into-a-memory-volume-the-pods-own-user-owns.md` | Copy an agent's credential into a memory volume the Pod's own user owns | accepted |
 | `adr/0011-the-conventions-template-is-the-frame.md` | The conventions template is the frame, and a divergence is earned by a fact | accepted |
+| `adr/0012-declare-an-agents-tool-set-in-its-definitions-values.md` | Declare an agent's tool set in its definition's values, and carry the keys this operator knows into a file | accepted |
