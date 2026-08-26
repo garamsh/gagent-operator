@@ -96,6 +96,14 @@ var _ = Describe("Agent workload", Ordered, func() {
 		_, err := utils.Run(exec.Command("kubectl", "create", "ns", agentTestNamespace))
 		Expect(err).NotTo(HaveOccurred(), "Failed to create the namespace")
 
+		// The manager's namespace enforces the standard on the operator; this is
+		// the one the workload it builds runs in. Enforcing it here is what makes
+		// the suite refuse a Pod the standard refuses.
+		By("labeling the namespace to enforce the restricted security policy")
+		_, err = utils.Run(exec.Command("kubectl", "label", "--overwrite", "ns", agentTestNamespace,
+			"pod-security.kubernetes.io/enforce=restricted"))
+		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+
 		By("creating the credentials Secret the Agent names")
 		_, err = kubectlIn("create", "secret", "generic", credentialsSecret,
 			"--from-literal=token="+credentialsToken)
