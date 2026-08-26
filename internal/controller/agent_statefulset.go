@@ -46,8 +46,11 @@ const (
 	credentialsCopyMode = "0600"
 
 	// agentFSGroup is the group the kubelet gives every volume in the Pod and
-	// adds to the supplementary groups of every process in it. It is what lets
-	// the init container read the projection and write the volume it copies into.
+	// adds to the supplementary groups of each container's initial process. It is
+	// what lets the init container open the projection, whose files the kubelet
+	// writes root-owned at 0440. It buys no write: the destination emptyDir
+	// arrives world-writable, so a measurement finding the copy writes without
+	// the group has not shown the group unearned.
 	agentFSGroup = 65532
 
 	// agentRunAsUser is the user every container of the Pod runs as, so that the
