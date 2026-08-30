@@ -15,6 +15,22 @@ Current architecture of the system and the decisions behind it. This file is the
 4. Keep this index current: every responsibility document and every ADR is listed here. An ADR covers a decision that changes a project rule — a settled choice that does not affect the rules does not earn one.
 5. **Every domain or concern has a responsibility document.** The PR that introduces one adds its document; the PR that removes one deletes it. A system with no code yet has none, and that is the correct state.
 
+### What this file does not take from the template's §Rules
+
+The template's §Rules holds eight rules; this file holds five. That difference is decided, not stale. Every clause below names `structure.md` or `structures/`, artefacts this project does not have, so each fails the first ground in [ADR 0011](adr/0011-the-conventions-template-is-the-frame.md): the template's text describes a shape this project does not have.
+
+| Not taken | Template commit | Why it cannot be true here |
+|---|---|---|
+| Rule 4's `structures/` sentence | `d2675ce` (`convention-driven-project#276`) | Names a directory this project never had, past a bootstrap it has already run. |
+| Rule 5's `structure.md` clause | `65523e6` (`convention-driven-project#287`) | Cites a rule 6 this file does not have, so taking it lands a dangling cross-reference. |
+| Rule 6, structural rules live in `structure.md` | `65523e6` (`convention-driven-project#287`) | Its subject is a file this project does not have. |
+| Rule 7, a point the structural rules leave to the project | `65523e6` (`convention-driven-project#287`) | Same subject. |
+| Rule 8, structural rules rank between the convention tiers | `214546f` (`convention-driven-project#300`) | Its operative clauses govern `structure.md` against the convention tiers; the only sentence that holds here is the one saying the rule asks nothing of a project without that file. |
+
+Rules 4 to 7 were refused in PR #68 on that ground. ADR 0011 postdates that PR and supplies a test it did not have, so the refusal was re-examined clause by clause against the test on 2026-08-31 and it stands. Rule 8 is not a re-examination: it landed upstream after `c7d9353`, the template commit #68 synced to, so it was never in front of that PR and is refused here for the first time. The same two commits also add and then revise §Structure's `structures/` bullet, which is not taken either, on the ground PR #68 gives for not taking the folder it describes.
+
+Before a delta between this file and the template is called stale, read it against this list and against this project's merged pull requests for the path. The template's log alone cannot tell a change refused here from one never seen: an adapted file with unadopted upstream commits behind it looks the same either way.
+
 ## Index
 
 ### Responsibility documents
