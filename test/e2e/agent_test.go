@@ -50,8 +50,8 @@ check() {
 }
 `
 
-// agentManifest is the Agent under test. Its image is loaded onto the node by
-// the suite.
+// agentManifest is the Agent under test. Its image is one a registry serves,
+// because the operator pulls every container of the Pod at every start.
 var agentManifest = fmt.Sprintf(`
 apiVersion: agent.garam.sh/v1alpha1
 kind: Agent

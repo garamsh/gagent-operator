@@ -212,6 +212,19 @@ var _ = Describe("Agent workload", func() {
 			To(MatchError(ContainSubstring(`violates PodSecurity "restricted:latest"`)))
 	})
 
+	It("pulls both images at every start, so that no node runs one it cached", func() {
+		name := "pulls-what-it-runs"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		_, err := reconcileAgent(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		pod := statefulSetFor(name).Spec.Template.Spec
+		Expect(pod.InitContainers[0].ImagePullPolicy).To(Equal(corev1.PullAlways))
+		Expect(pod.Containers[0].ImagePullPolicy).To(Equal(corev1.PullAlways))
+	})
+
 	It("leaves the root filesystem of every container writable, which restricted does not ask for", func() {
 		name := "writes-its-own-filesystem"
 		createSecret(credentialsSecretName(name))

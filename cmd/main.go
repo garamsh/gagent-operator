@@ -98,7 +98,8 @@ func main() {
 		"How often this operator asks garam to replace the certificate it authenticates with.")
 	flag.StringVar(&agentImage, "agent-image", "",
 		"The container image every agent this operator constructs runs. It has no default: name the image "+
-			"and the tag or digest explicitly. Required where garam-address is set.")
+			"and the tag or digest explicitly. Every container of an agent's Pod is pulled at every start, so "+
+			"an image no registry serves cannot be run. Required where garam-address is set.")
 	flag.StringVar(&agentStorageSize, "agent-storage-size", "",
 		"The size of the volume every agent this operator constructs keeps its state on, as a Kubernetes "+
 			"quantity. Required where garam-address is set.")

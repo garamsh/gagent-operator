@@ -21,23 +21,21 @@ var (
 	shouldCleanupCertManager = false
 )
 
-// The Agent under test runs an image that is not the agent, because no gagent
-// image exists to run. What the suite needs of it is an entrypoint that stays up
-// without being given a command — the operator sets none — a shell that can read
-// the mounted credentials, and a uid that is not root. The last one is not a
-// detail: an image that keeps root reads a root-owned credential file whatever
-// mode it carries, which is how #31 stayed invisible through every layer.
-const (
-	// agentImageSource is pinned by digest, so the bytes cannot change under the
-	// tag. This one runs as uid 101.
-	agentImageSource = "nginxinc/nginx-unprivileged@sha256:" +
-		"0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6"
-
-	// agentImage is the reference the Agent under test carries. It resolves in no
-	// registry: the suite puts this image on the node, and a Pod that reaches for
-	// a registry instead fails rather than quietly running some other nginx.
-	agentImage = "gagent-e2e-agent:nginx-unprivileged-1.29-alpine"
-)
+// agentImage is what the Agent under test runs, and is not the agent's own,
+// because no gagent image exists to run. What the suite needs of it is an
+// entrypoint that stays up without being given a command — the operator sets
+// none — a shell that can read the mounted credentials, and a uid that is not
+// root. The last one is not a detail: an image that keeps root reads a
+// root-owned credential file whatever mode it carries, which is how #31 stayed
+// invisible through every layer.
+//
+// The reference is a registry's and is pinned by digest: the operator pulls
+// every container of an agent's Pod at every start, so an image the suite put on
+// the node would leave the Pod reaching for a registry that does not serve it,
+// and the digest is what keeps the pull from bringing some other nginx. This one
+// runs as uid 101.
+const agentImage = "nginxinc/nginx-unprivileged@sha256:" +
+	"0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6"
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
 // The default setup requires Kind and CertManager.
@@ -63,20 +61,6 @@ var _ = BeforeSuite(func() {
 	err = utils.LoadImageToKindClusterWithName(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
 
-	By("pulling the image the Agent under test runs")
-	cmd = exec.Command(containerTool(), "pull", agentImageSource)
-	_, err = utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to pull the image for the Agent under test")
-
-	By("naming that image for the Agent under test")
-	cmd = exec.Command(containerTool(), "tag", agentImageSource, agentImage)
-	_, err = utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to name the image for the Agent under test")
-
-	By("loading the Agent's image on Kind")
-	err = utils.LoadImageToKindClusterWithName(agentImage)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the Agent's image into Kind")
-
 	configureKubectlKubeRC()
 	setupCertManager()
 	deployOperator()
@@ -86,17 +70,6 @@ var _ = AfterSuite(func() {
 	undeployOperator()
 	teardownCertManager()
 })
-
-// containerTool is the tool that builds and pulls images, which the Makefile
-// passes through so that the image the Agent runs lands in the same store the
-// manager image was built into.
-func containerTool() string {
-	if tool := os.Getenv("CONTAINER_TOOL"); tool != "" {
-		return tool
-	}
-
-	return "docker"
-}
 
 // deployOperator installs the CRDs and the manager, once for every container in
 // the suite: a container that tore them down in its own AfterAll would take them
