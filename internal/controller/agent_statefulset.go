@@ -172,6 +172,10 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 
 	credentials := containerNamed(&statefulSet.Spec.Template.Spec.InitContainers, credentialsContainerName)
 	credentials.Image = copyImage
+	// Always on this operator's own ground: the copy image is the deployer's and
+	// nothing here requires its tag to name one build, so a node's cache would
+	// leave two agents copying a credential with different tools under one name.
+	credentials.ImagePullPolicy = corev1.PullAlways
 	credentials.Command = copyCredentialsCommand()
 	credentials.SecurityContext = containerSecurityContext()
 	credentials.VolumeMounts = []corev1.VolumeMount{
@@ -181,6 +185,12 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 
 	container := containerNamed(&statefulSet.Spec.Template.Spec.Containers, agentContainerName)
 	container.Image = agent.Spec.Image
+	// gagent requires a consumer of its images to pull always, because the
+	// repositories holding its bring-up builds are emptied when a release path
+	// publishes: the default IfNotPresent turns a reference that stopped
+	// resolving into a per-node stale cache
+	// (gagent@04ed05a:docs/architecture/adr/0020-immutable-image-repositories.md).
+	container.ImagePullPolicy = corev1.PullAlways
 	container.Resources = agent.Spec.Resources
 	container.SecurityContext = containerSecurityContext()
 	// The copy is not mounted read-only: the rule it satisfies has the reader
