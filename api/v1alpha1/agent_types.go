@@ -10,13 +10,18 @@ import (
 // AgentSpec defines the desired state of Agent
 type AgentSpec struct {
 	// image is the container image the agent runs. It has no default: name the
-	// image and the tag or digest to run explicitly. It must run as uid 65532,
-	// which is the user every container of the agent's Pod is given: the agent's
-	// credential is delivered as a file that user owns, and the process that
-	// reads it is refused a file owned by anyone else. It must also need no Linux
-	// capability, no privilege it did not start with, and nothing the runtime's
-	// default seccomp profile blocks, because the Pod this operator builds is
-	// one PodSecurity restricted admits and grants none of the three.
+	// image and the tag or digest to run explicitly. A digest names one build and
+	// a tag is accepted; what the holder of a tag accepts is that a restart can
+	// bring different bytes under the same name, because every container of this
+	// Pod is pulled at every start rather than read from a node's cache. An image
+	// no registry serves cannot be run here for the same reason, however it
+	// reached the node. It must run as uid 65532, which is the user every
+	// container of the agent's Pod is given: the agent's credential is delivered
+	// as a file that user owns, and the process that reads it is refused a file
+	// owned by anyone else. It must also need no Linux capability, no privilege
+	// it did not start with, and nothing the runtime's default seccomp profile
+	// blocks, because the Pod this operator builds is one PodSecurity restricted
+	// admits and grants none of the three.
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	Image string `json:"image"`
