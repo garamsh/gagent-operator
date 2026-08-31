@@ -39,6 +39,7 @@ Before a delta between this file and the template is called stale, read it again
 |---|---|
 | `agent.md` | The `agent.garam.sh` API group, the `Agent` kind, and its controller |
 | `configuration.md` | How this operator's deployment is configured, and which repository owns each value |
+| `delivery.md` | The image this project publishes, the reference a deployment uses, and where its output lands in a cluster |
 
 ### ADRs
 
@@ -57,3 +58,4 @@ Before a delta between this file and the template is called stale, read it again
 | `adr/0011-the-conventions-template-is-the-frame.md` | The conventions template is the frame, and a divergence is earned by a fact | accepted |
 | `adr/0012-declare-an-agents-tool-set-in-its-definitions-values.md` | Declare an agent's tool set in its definition's values, and carry the keys this operator knows into a file | accepted |
 | `adr/0013-the-base-carries-what-every-deployment-shares.md` | Carry what every deployment shares in the base, and an environment's values where that environment is reconciled | accepted |
+| `adr/0014-the-image-repository-is-immutable-and-a-deployment-references-a-digest.md` | Keep the image repository immutable with a tag naming one commit, and reference the image by digest with the tag beside it | accepted |
