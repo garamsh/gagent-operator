@@ -45,6 +45,12 @@ const agentImage = "nginxinc/nginx-unprivileged@sha256:" +
 // To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
+	// Before RunSpecs, not in BeforeSuite: Ginkgo runs AfterSuite even when
+	// BeforeSuite failed, so a suite that starts against the wrong cluster still
+	// reaches undeployOperator's `kubectl delete ns` there.
+	if err := utils.CheckKindContext(); err != nil {
+		t.Fatalf("refusing to run against a cluster this run does not own: %v", err)
+	}
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting gagent-operator e2e test suite\n")
 	RunSpecs(t, "e2e suite")
 }
