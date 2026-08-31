@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	agentv1alpha1 "github.com/garamsh/gagent-operator/api/v1alpha1"
 	"github.com/garamsh/gagent-operator/test/utils"
 )
 
@@ -22,6 +23,17 @@ const (
 	agentUnderTest    = "e2e-agent"
 	agentPod          = agentUnderTest + "-0"
 	credentialsSecret = agentUnderTest + "-credentials"
+
+	// agentNeverStarts differs from the Agent under test in its image alone,
+	// and that image resolves nowhere: the operator reconciles its workload and
+	// the cluster never runs one behind it. It is what makes a green readiness
+	// condition mean anything — the same operator, the same namespace, the same
+	// spec but for one field, reporting the opposite.
+	agentNeverStarts = "e2e-agent-never-starts"
+
+	// unstartableImage names a host no registry can come to serve: .invalid is
+	// reserved for that (RFC 2606 section 2).
+	unstartableImage = "gagent.invalid/agent:v0"
 
 	// credentialsToken is what the specs look for: in the mounted file, and
 	// nowhere in the container's environment.
@@ -50,9 +62,11 @@ check() {
 }
 `
 
-// agentManifest is the Agent under test. Its image is one a registry serves,
-// because the operator pulls every container of the Pod at every start.
-var agentManifest = fmt.Sprintf(`
+// agentManifestFor renders an Agent differing from every other this suite
+// creates in its name and its image, so that a difference in what the operator
+// reports traces to the image and to nothing else.
+func agentManifestFor(name, image string) string {
+	return fmt.Sprintf(`
 apiVersion: agent.garam.sh/v1alpha1
 kind: Agent
 metadata:
@@ -62,7 +76,12 @@ spec:
   image: %s
   credentialsSecretName: %s
   storageSize: 64Mi
-`, agentUnderTest, agentTestNamespace, agentImage, credentialsSecret)
+`, name, agentTestNamespace, image, credentialsSecret)
+}
+
+// agentManifest is the Agent under test. Its image is one a registry serves,
+// because the operator pulls every container of the Pod at every start.
+var agentManifest = agentManifestFor(agentUnderTest, agentImage)
 
 // kubectlIn runs kubectl against the namespace the Agent under test lives in.
 // The namespace goes in front: after the `--` of an exec it would be an argument
@@ -83,6 +102,13 @@ func waitForAgentPod() {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(phase).To(Equal("Running"))
 	}, 3*time.Minute, time.Second).Should(Succeed())
+}
+
+// agentCondition reads one field of one condition off an Agent. An absent
+// condition reads as the empty string, which no assertion here accepts.
+func agentCondition(agent, conditionType, field string) (string, error) {
+	return kubectlIn("get", "agent", agent, "-o",
+		fmt.Sprintf(`jsonpath={.status.conditions[?(@.type=="%s")].%s}`, conditionType, field))
 }
 
 // execInAgent runs a command inside the agent container of the Agent's Pod.
@@ -145,11 +171,55 @@ var _ = Describe("Agent workload", Ordered, func() {
 
 		By("reading the Synced condition the operator wrote")
 		Eventually(func(g Gomega) {
-			status, err := kubectlIn("get", "agent", agentUnderTest,
-				"-o", `jsonpath={.status.conditions[?(@.type=="Synced")].status}`)
+			status, err := agentCondition(agentUnderTest, agentv1alpha1.ConditionSynced, "status")
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(status).To(Equal("True"))
 		}, time.Minute, time.Second).Should(Succeed())
+	})
+
+	It("reports a workload the cluster never ran, beside one it did", func() {
+		By("creating an Agent differing from the one under test in its image alone")
+		apply := exec.Command("kubectl", "apply", "-f", "-")
+		apply.Stdin = strings.NewReader(agentManifestFor(agentNeverStarts, unstartableImage))
+		_, err := utils.Run(apply)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create the Agent that cannot start")
+		DeferCleanup(func() {
+			_, _ = kubectlIn("delete", "agent", agentNeverStarts, "--ignore-not-found", "--timeout=2m")
+		})
+
+		// This is the reported defect written as a spec: the operator wrote the
+		// workload it was asked for, so Synced is True and stays True, and
+		// nothing has ever run behind it.
+		By("reading both conditions on the Agent no image serves")
+		Eventually(func(g Gomega) {
+			synced, err := agentCondition(agentNeverStarts, agentv1alpha1.ConditionSynced, "status")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(synced).To(Equal("True"))
+
+			available, err := agentCondition(agentNeverStarts, agentv1alpha1.ConditionAvailable, "status")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(available).To(Equal("False"))
+
+			reason, err := agentCondition(agentNeverStarts, agentv1alpha1.ConditionAvailable, "reason")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(reason).To(Equal(agentv1alpha1.ReasonReplicaNotReady))
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		// The control, and the reason this spec is here rather than only in the
+		// envtest suite: a kubelet decided this replica is ready. Below this
+		// layer the field is only ever what a spec wrote into it, so False
+		// there is consistent with a controller that reads nothing.
+		By("reading the same condition on the Agent whose Pod does run")
+		waitForAgentPod()
+		Eventually(func(g Gomega) {
+			available, err := agentCondition(agentUnderTest, agentv1alpha1.ConditionAvailable, "status")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(available).To(Equal("True"))
+
+			reason, err := agentCondition(agentUnderTest, agentv1alpha1.ConditionAvailable, "reason")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(reason).To(Equal(agentv1alpha1.ReasonReplicaReady))
+		}, 2*time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("delivers the credential as a file the rule its reader applies accepts, and nowhere in the environment", func() {

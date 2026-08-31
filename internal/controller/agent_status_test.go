@@ -30,6 +30,18 @@ func syncedCondition(name string) *metav1.Condition {
 	return synced
 }
 
+// availableCondition is the Available condition an Agent of that name carries,
+// and fails the spec when it carries none.
+func availableCondition(name string) *metav1.Condition {
+	GinkgoHelper()
+
+	agent := readAgent(name)
+	available := meta.FindStatusCondition(agent.Status.Conditions, agentv1alpha1.ConditionAvailable)
+	Expect(available).NotTo(BeNil())
+
+	return available
+}
+
 var _ = Describe("Agent status", func() {
 	It("reports the workload it reconciled, and no condition it does not set", func() {
 		name := "reports-its-workload"
@@ -40,14 +52,15 @@ var _ = Describe("Agent status", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		agent := readAgent(name)
-		Expect(agent.Status.Conditions).To(HaveLen(1))
+		Expect(agent.Status.Conditions).To(HaveLen(2))
 		Expect(agent.Status.ObservedGeneration).To(Equal(agent.Generation))
 
-		synced := agent.Status.Conditions[0]
-		Expect(synced.Type).To(Equal(agentv1alpha1.ConditionSynced))
+		synced := syncedCondition(name)
 		Expect(synced.Status).To(Equal(metav1.ConditionTrue))
 		Expect(synced.Reason).To(Equal(agentv1alpha1.ReasonWorkloadReconciled))
 		Expect(synced.ObservedGeneration).To(Equal(agent.Generation))
+
+		Expect(availableCondition(name).ObservedGeneration).To(Equal(agent.Generation))
 	})
 
 	It("reports a credentials Secret that does not exist, and stops reporting it once it does", func() {
@@ -63,6 +76,12 @@ var _ = Describe("Agent status", func() {
 		Expect(absent.Reason).To(Equal(agentv1alpha1.ReasonCredentialsSecretMissing))
 		Expect(absent.Message).To(ContainSubstring(credentialsSecretName(name)))
 
+		// Unknown rather than False: nothing was read, which is not the same
+		// as having read a workload that is not running.
+		unobserved := availableCondition(name)
+		Expect(unobserved.Status).To(Equal(metav1.ConditionUnknown))
+		Expect(unobserved.Reason).To(Equal(agentv1alpha1.ReasonWorkloadNotObserved))
+
 		By("reconciling once the Secret exists")
 		createSecret(credentialsSecretName(name))
 		_, err = reconcileAgent(name)
@@ -71,6 +90,10 @@ var _ = Describe("Agent status", func() {
 		arrived := syncedCondition(name)
 		Expect(arrived.Status).To(Equal(metav1.ConditionTrue))
 		Expect(arrived.Reason).To(Equal(agentv1alpha1.ReasonWorkloadReconciled))
+
+		observed := availableCondition(name)
+		Expect(observed.Status).To(Equal(metav1.ConditionFalse))
+		Expect(observed.Reason).To(Equal(agentv1alpha1.ReasonReplicaNotReady))
 	})
 
 	It("reports a storage size the workload cannot be changed to, without failing", func() {
@@ -94,6 +117,51 @@ var _ = Describe("Agent status", func() {
 		Expect(synced.Status).To(Equal(metav1.ConditionFalse))
 		Expect(synced.Reason).To(Equal(agentv1alpha1.ReasonStorageSizeImmutable))
 		Expect(synced.Message).To(ContainSubstring("2Gi"))
+
+		// Readiness is reported on a spec this controller cannot act on as well
+		// as on one it can. The condition already exists from the reconcile
+		// above, so the generation it was computed from is what shows this
+		// reconcile set it rather than left it standing.
+		available := availableCondition(name)
+		Expect(available.Status).To(Equal(metav1.ConditionFalse))
+		Expect(available.ObservedGeneration).To(Equal(readAgent(name).Generation))
+	})
+
+	It("reports a workload with no ready replica, and reports one that has it", func() {
+		name := "reports-workload-readiness"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		By("reconciling a workload no replica is ready on")
+		_, err := reconcileAgent(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		notReady := availableCondition(name)
+		Expect(notReady.Status).To(Equal(metav1.ConditionFalse))
+		Expect(notReady.Reason).To(Equal(agentv1alpha1.ReasonReplicaNotReady))
+		Expect(notReady.Message).To(ContainSubstring(name))
+
+		// The control, and the whole of what this layer can say. envtest runs
+		// neither a kubelet nor the StatefulSet controller, so readyReplicas is
+		// only ever what a spec writes: the two readings below differ in that
+		// field alone. Without the second, False here is consistent with a
+		// controller that reads nothing and reports False always.
+		By("reporting a ready replica the way the StatefulSet controller would")
+		workload := statefulSetFor(name)
+		workload.Status.Replicas = 1
+		workload.Status.ReadyReplicas = 1
+		Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
+
+		_, err = reconcileAgent(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		ready := availableCondition(name)
+		Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+		Expect(ready.Reason).To(Equal(agentv1alpha1.ReasonReplicaReady))
+
+		By("leaving Synced asserting what it asserted before")
+		Expect(syncedCondition(name).Status).To(Equal(metav1.ConditionTrue))
+		Expect(syncedCondition(name).Reason).To(Equal(agentv1alpha1.ReasonWorkloadReconciled))
 	})
 
 	It("tracks the generation its status was computed from", func() {
