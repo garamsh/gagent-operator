@@ -74,6 +74,21 @@ spec:
           # argument. Pinned to the multi-platform index digest, because a tag
           # can be moved to different content.
           - --agent-copy-image=busybox:stable-musl@sha256:3c6ae8008e2c2eedd141725c30b20d9c36b026eb796688f88205845ef17aa213
+          # The Secret this operator reads its credential from and renews into.
+          # It is the one the volume below mounts, and the two names have to
+          # agree.
+          - --garam-credential-secret=garam-credential
+          # The credential as the kubelet delivers it, under that volume's
+          # mountPath. Each file's base name is the Secret key it is renewed
+          # into.
+          - --garam-certificate-file=/etc/garam/credential/certificate.pem
+          - --garam-key-file=/etc/garam/credential/key.pem
+          # What garam's listener is verified against: the server root, not the
+          # organization issuer this operator's own certificate arrives beside.
+          - --garam-trust-file=/etc/garam/credential/server-root.pem
+          # --garam-address, --agent-image and --agent-storage-size are the
+          # deploying overlay's and are never set here: each names something one
+          # cluster owns. docs/architecture/configuration.md names the overlay.
         image: controller:latest
         name: manager
         env:
