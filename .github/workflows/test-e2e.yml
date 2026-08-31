@@ -6,9 +6,6 @@ on:
 
 permissions: {}
 
-env:
-  KIND_VERSION: v0.32.0
-
 jobs:
   test-e2e:
     permissions:
@@ -30,14 +27,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install kind
-        run: |
-          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$(go env GOARCH)"
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-
-      - name: Verify kind installation
-        run: kind version
-
+      # `make test-e2e` installs kind itself, at the version the Makefile pins, so
+      # this job holds no kind version of its own. helm/kind-action would put that
+      # version and the cluster back here, where a contributor's command cannot
+      # reach either.
       - name: Run the e2e tests
         run: make test-e2e

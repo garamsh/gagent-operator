@@ -72,7 +72,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
+# The default setup installs Kind into $(LOCALBIN) and builds/loads the Manager Docker image locally.
 # kubectl kuberc is disabled by default for test isolation; enable with:
 # - KUBECTL_KUBERC=true
 # CertManager is installed by default; skip with:
@@ -80,17 +80,13 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 KIND_CLUSTER ?= gagent-operator-test-e2e
 
 .PHONY: setup-test-e2e
-setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
-	@command -v $(KIND) >/dev/null 2>&1 || { \
-		echo "Kind is not installed. Please install Kind manually."; \
-		exit 1; \
-	}
-	@case "$$($(KIND) get clusters)" in \
+setup-test-e2e: kind ## Set up a Kind cluster for e2e tests if it does not exist
+	@case "$$("$(KIND)" get clusters)" in \
 		*"$(KIND_CLUSTER)"*) \
 			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
 		*) \
 			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
-			$(KIND) create cluster --name $(KIND_CLUSTER) ;; \
+			"$(KIND)" create cluster --name $(KIND_CLUSTER) ;; \
 	esac
 
 .PHONY: test-e2e
@@ -99,8 +95,8 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
-cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
-	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
+	@"$(KIND)" delete cluster --name $(KIND_CLUSTER)
 
 .PHONY: lint
 lint: lint-coverage golangci-lint ## Run golangci-lint linter
@@ -313,14 +309,20 @@ $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
 ## Tool Binaries
+# kubectl is not pinned the way the tools below are: k8s.io/kubernetes carries
+# replace directives, which `go install <pkg>@<version>` refuses. `make test-e2e`
+# reaches it through `make install` and `make deploy`, so it has to be on PATH.
 KUBECTL ?= kubectl
-KIND ?= kind
+KIND ?= $(LOCALBIN)/kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
+# The PM moves this pin and reviews it when the Kubernetes libraries move:
+# Dependabot reads go.mod, and kind is not a dependency of this module.
+KIND_VERSION ?= v0.33.0
 KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
 
@@ -335,6 +337,12 @@ ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
 
 GOLANGCI_LINT_VERSION ?= v2.12.2
+
+.PHONY: kind
+kind: $(KIND) ## Download kind locally if necessary.
+$(KIND): $(LOCALBIN)
+	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
+
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
 $(KUSTOMIZE): $(LOCALBIN)
