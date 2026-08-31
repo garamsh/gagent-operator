@@ -52,13 +52,20 @@ type AgentSpec struct {
 
 // AgentStatus defines the observed state of Agent.
 type AgentStatus struct {
-	// conditions report what the controller observed of this Agent. One type is
-	// set:
+	// conditions report what the controller observed of this Agent. Two types
+	// are set, and they answer different questions:
 	//
 	// - "Synced": True when the cluster carries the workload this Agent's spec
 	//   asks for. False when the Secret named by credentialsSecretName does not
 	//   exist, and False when the spec was edited in a way the running workload
 	//   cannot take. The reason says which.
+	//
+	// - "Available": True when the workload reports a ready replica. False when
+	//   it reports none, which covers a replica still starting as much as one
+	//   that cannot start. Unknown when the controller did not get as far as
+	//   reading the workload. A replica is ready once its containers are
+	//   running, and this workload carries no readiness probe, so no part of
+	//   this says whether the agent inside those containers works.
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -100,11 +107,31 @@ const (
 	ReasonStorageSizeImmutable = "StorageSizeImmutable"
 )
 
+// ConditionAvailable is the condition type reporting whether the workload an
+// Agent's spec asks for is running. It is the name a Deployment carries for the
+// same split: ConditionSynced reports on the declaration, and this reports on
+// what the cluster is running behind it.
+const ConditionAvailable = "Available"
+
+// Reasons for the Available condition.
+const (
+	// ReasonReplicaReady is set when the workload reports a ready replica.
+	ReasonReplicaReady = "ReplicaReady"
+
+	// ReasonReplicaNotReady is set when the workload reports no ready replica.
+	ReasonReplicaNotReady = "ReplicaNotReady"
+
+	// ReasonWorkloadNotObserved is set when the controller stopped before
+	// reconciling a workload, so it read none and observed no readiness.
+	ReasonWorkloadNotObserved = "WorkloadNotObserved"
+)
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 52",message="metadata.name must be 52 characters or fewer, because the Pods of this Agent's workload carry the name with a suffix of up to 11 characters in a label, and a label value stops at 63"
 // +kubebuilder:printcolumn:name="Synced",type=string,JSONPath=`.status.conditions[?(@.type=="Synced")].status`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Synced")].reason`
+// +kubebuilder:printcolumn:name="Available",type=string,JSONPath=`.status.conditions[?(@.type=="Available")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Agent is the Schema for the agents API

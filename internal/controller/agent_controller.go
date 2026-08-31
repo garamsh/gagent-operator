@@ -66,6 +66,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 // error only where retrying can fix the failure: a spec this controller cannot
 // act on is a condition, because requeueing it would never end and the object
 // would say nothing about why.
+//
+// The workload's readiness is read off the StatefulSet this reconcile already
+// holds, so it costs no second read and is reported on a spec this controller
+// cannot act on as readily as on one it can.
 func (r *AgentReconciler) reconcileWorkload(ctx context.Context, agent *agentv1alpha1.Agent) error {
 	credentials := client.ObjectKey{Namespace: agent.Namespace, Name: agent.Spec.CredentialsSecretName}
 	if err := r.credentialsExist(ctx, credentials); err != nil {
@@ -74,6 +78,10 @@ func (r *AgentReconciler) reconcileWorkload(ctx context.Context, agent *agentv1a
 			// own; the watch on Secrets is what brings this Agent back.
 			setSynced(agent, metav1.ConditionFalse, agentv1alpha1.ReasonCredentialsSecretMissing,
 				fmt.Sprintf("Secret %q does not exist, and the workload is not built until it does", credentials.Name))
+			// Unknown and not False: this reconcile read no workload, and a
+			// Secret deleted after one was built leaves that workload running.
+			setAvailable(agent, metav1.ConditionUnknown, agentv1alpha1.ReasonWorkloadNotObserved,
+				"The workload was not reconciled, so its readiness was not observed. The Synced condition says why")
 
 			return nil
 		}
@@ -90,12 +98,12 @@ func (r *AgentReconciler) reconcileWorkload(ctx context.Context, agent *agentv1a
 		setSynced(agent, metav1.ConditionFalse, agentv1alpha1.ReasonStorageSizeImmutable,
 			fmt.Sprintf("The volume was claimed at %s and spec.storageSize now asks for %s, which a StatefulSet's claim template cannot be changed to",
 				claimed.String(), agent.Spec.StorageSize.String()))
-
-		return nil
+	} else {
+		setSynced(agent, metav1.ConditionTrue, agentv1alpha1.ReasonWorkloadReconciled,
+			fmt.Sprintf("StatefulSet %q carries what this Agent's spec asks for", statefulSet.Name))
 	}
 
-	setSynced(agent, metav1.ConditionTrue, agentv1alpha1.ReasonWorkloadReconciled,
-		fmt.Sprintf("StatefulSet %q carries what this Agent's spec asks for", statefulSet.Name))
+	setAvailableFromWorkload(agent, statefulSet)
 
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +24,39 @@ func setSynced(agent *agentv1alpha1.Agent, status metav1.ConditionStatus, reason
 		Message:            message,
 		ObservedGeneration: agent.Generation,
 	})
+}
+
+// setAvailable records on the Agent what this reconcile observed of the
+// workload's readiness, which is a different question from whether the workload
+// carries what the spec asks for.
+func setAvailable(agent *agentv1alpha1.Agent, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
+		Type:               agentv1alpha1.ConditionAvailable,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: agent.Generation,
+	})
+}
+
+// setAvailableFromWorkload reads the readiness of the StatefulSet this reconcile
+// already holds. The message bounds what a ready replica is worth: the workload
+// carries no readiness probe, so a container that started is ready whatever it
+// is running.
+func setAvailableFromWorkload(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet) {
+	// One replica is the whole workload, per ADR 0005, so a ready replica is
+	// every replica.
+	if statefulSet.Status.ReadyReplicas > 0 {
+		setAvailable(agent, metav1.ConditionTrue, agentv1alpha1.ReasonReplicaReady,
+			fmt.Sprintf("StatefulSet %q reports its replica ready. The workload carries no readiness probe, so this says the agent's containers are running and nothing about whether the agent inside them works",
+				statefulSet.Name))
+
+		return
+	}
+
+	setAvailable(agent, metav1.ConditionFalse, agentv1alpha1.ReasonReplicaNotReady,
+		fmt.Sprintf("StatefulSet %q reports no ready replica. This covers a replica still starting as much as one that cannot start, and does not say which",
+			statefulSet.Name))
 }
 
 // writeStatus writes the status this reconcile observed, and only when it says
@@ -45,9 +79,14 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent, held *agentv1a
 		return fmt.Errorf("patch agent status: %w", err)
 	}
 
+	reported := logf.FromContext(ctx)
 	if synced := meta.FindStatusCondition(agent.Status.Conditions, agentv1alpha1.ConditionSynced); synced != nil {
-		logf.FromContext(ctx).Info("Reported on the Agent", "synced", synced.Status, "reason", synced.Reason)
+		reported = reported.WithValues("synced", synced.Status, "syncedReason", synced.Reason)
 	}
+	if available := meta.FindStatusCondition(agent.Status.Conditions, agentv1alpha1.ConditionAvailable); available != nil {
+		reported = reported.WithValues("available", available.Status, "availableReason", available.Reason)
+	}
+	reported.Info("Reported on the Agent")
 
 	return nil
 }
