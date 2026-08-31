@@ -79,24 +79,37 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 # - CERT_MANAGER_INSTALL_SKIP=true
 KIND_CLUSTER ?= gagent-operator-test-e2e
 
+# The kubeconfig this run owns, and the destination of every command the suite
+# makes: `go test` below carries it, and kubectl, kustomize and the sub-makes
+# `make deploy` and `make undeploy` all inherit it from there. Given no
+# --kubeconfig, kind writes $KUBECONFIG or ~/.kube/config and rewrites its
+# current-context on every create and delete, so a run reading that file takes
+# its destination from whatever another process last left in it — which is how a
+# run aimed at Kind reached a production cluster (#111). Under dist/ because a
+# target writes it and nothing tracks it.
+KUBECONFIG_E2E := $(abspath dist/kubeconfig-$(KIND_CLUSTER))
+
 .PHONY: setup-test-e2e
 setup-test-e2e: kind ## Set up a Kind cluster for e2e tests if it does not exist
+	@mkdir -p dist
 	@case "$$("$(KIND)" get clusters)" in \
 		*"$(KIND_CLUSTER)"*) \
-			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
+			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Writing its kubeconfig to $(KUBECONFIG_E2E)."; \
+			"$(KIND)" export kubeconfig --name $(KIND_CLUSTER) --kubeconfig "$(KUBECONFIG_E2E)" ;; \
 		*) \
-			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
-			"$(KIND)" create cluster --name $(KIND_CLUSTER) ;; \
+			echo "Creating Kind cluster '$(KIND_CLUSTER)' with kubeconfig $(KUBECONFIG_E2E)..."; \
+			"$(KIND)" create cluster --name $(KIND_CLUSTER) --kubeconfig "$(KUBECONFIG_E2E)" ;; \
 	esac
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+	KUBECONFIG="$(KUBECONFIG_E2E)" KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
-	@"$(KIND)" delete cluster --name $(KIND_CLUSTER)
+	@"$(KIND)" delete cluster --name $(KIND_CLUSTER) --kubeconfig "$(KUBECONFIG_E2E)"
+	@rm -f "$(KUBECONFIG_E2E)"
 
 .PHONY: lint
 lint: lint-coverage golangci-lint ## Run golangci-lint linter
