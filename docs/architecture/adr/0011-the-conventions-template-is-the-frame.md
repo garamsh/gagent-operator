@@ -67,3 +67,19 @@ Ruled out: **declaring the divergence set in a file.** A list is a second place 
 Not decided here: whether any convention this project currently keeps should be proposed for change upstream. That is a per-rule question and this decides only where such a question goes.
 
 **No responsibility document is affected.** `docs/architecture/README.md` Rule 3 pairs an ADR with the documents describing what it changed, and this changes no domain of the system — it governs how a rule enters the repository. `docs/architecture/agent.md` describes the `Agent` API and its controller and has nothing to say about it. [ADR 0002](0002-dev-integration-branch.md) is the precedent: a process decision, recorded with no responsibility document beside it, because there was none to pair with.
+
+## Errata
+
+### 2026-08-31 — §Architecture was an unadopted deletion, not an adaptation
+
+Decision's table gives two grounds for `docs/convention/README.md` diverging: "Its tables are the inventory of the convention files this project keeps, and its §Architecture section records that this project has none." The first holds. The second is wrong, and was already wrong on the date above this entry's own.
+
+§Architecture was not a section this project wrote and kept. The template carried one and deleted it in `f5706ae` (`convention-driven-project#294`), which in the same commit removed `docs/convention/arch-domain.md`, the section's §Contents entry, precedence tier 2, and the plural in "bootstrap prunes only the tables below". `git merge-base --is-ancestor f5706ae d796d58` holds, and `d796d58` is the template commit PR #70 synced to, so that deletion stood in front of this project and was not taken. PR #68 read the same commit and recorded two of its effects — the deleted file and the tier — as nothing to do, both correctly, and named neither the section nor the plural.
+
+So the clause cited here as evidence of an earned adaptation was evidence of the opposite. An absent section has no text that could fail to be true here, and "the template's text cannot be true here" is the test this Decision states, so the section could never have passed it. It was an unadopted deletion carrying an adaptation's reason.
+
+The decision stands, and so does the row. Its first ground carries it alone: §Stack-specific's table lists the three stack files this project keeps, which is an inventory the template ships no entries for. `docs/convention/README.md` remains adapted with §Architecture gone.
+
+This is also the third instance of the blind spot Consequences names, after upstream `#238` and the §Rules case closed by PR #100 — and the first where the missed lines sat in a file the derivation had already classified as adapted for a reason that was itself false.
+
+Falsified on issue #69.
