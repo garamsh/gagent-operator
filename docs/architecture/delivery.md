@@ -24,6 +24,7 @@ What this project publishes, where its output lands in a cluster, and who owns e
   - Check out the commit being published and confirm the tree is unmodified. Nothing downstream will check this.
   - Build with a builder that produces an image index, tagged `486152169996.dkr.ecr.ap-northeast-2.amazonaws.com/garam/gagent-operator-dev:<abbreviated commit hash>`, and push.
   - Take the index digest the push reports, and give the deployment the tag and that digest together. Which repository owns the value that carries it is `configuration.md`; this document says what the value must look like.
+  - Open a pull request from `dev` to `main` at the commit just published and merge it without squashing. Publishing is what advances `main`, and a squash would mint a commit no published tag names; `integration.md` holds the rule.
 - A commit already published cannot be published again — the repository refuses the second push of the tag rather than overwriting it. The repair for a bad image is a new commit, not a re-push.
 
 - **This project's workloads land in every namespace that holds an `Agent`, and that set is unbounded on purpose.** `config/rbac/role.yaml` is a ClusterRole bound cluster-wide, so a StatefulSet is built wherever an `Agent` is created. The one namespace `config/` names — `gagent-operator-system`, in `config/default/kustomization.yaml` — is where the manager runs, not the limit of where its output goes.

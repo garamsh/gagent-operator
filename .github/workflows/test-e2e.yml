@@ -1,8 +1,11 @@
 name: E2E Tests
 
+# No `pull_request` trigger: this suite runs where a change lands. `make test-e2e`
+# builds and owns the cluster it uses, so an author runs it before pushing and CI runs
+# it on the merge nobody runs by hand (ADR 0015).
 on:
   push:
-  pull_request:
+    branches: [dev, main]
 
 permissions: {}
 

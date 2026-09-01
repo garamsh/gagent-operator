@@ -1,8 +1,14 @@
 name: Checks
 
+# A task branch push is not a trigger; its pull request covers those commits, and
+# `push` covers the squash merge no pull-request run saw. The base filter keeps the
+# `dev` -> `main` promotion pull request off a commit its `push` to `dev` already ran
+# (ADR 0015).
 on:
   push:
+    branches: [dev, main]
   pull_request:
+    branches: [dev]
 
 permissions: {}
 
