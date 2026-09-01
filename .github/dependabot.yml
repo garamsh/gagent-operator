@@ -1,6 +1,6 @@
-# GitHub reads this file from the default branch, so a change here takes effect once
-# `dev` reaches `main`. `target-branch` sets both the branch whose manifests are read and
-# the branch pull requests are opened against.
+# GitHub reads this file from the default branch, so a change here takes effect once that
+# branch holds it. `target-branch` sets both the branch whose manifests are read and the
+# branch pull requests are opened against.
 version: 2
 updates:
   - package-ecosystem: github-actions

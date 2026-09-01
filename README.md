@@ -37,6 +37,8 @@ The Makefile downloads controller-gen, kustomize, setup-envtest, and golangci-li
 
 End-to-end tests need a cluster and are not part of that set: `make test-e2e` creates a Kind cluster, runs them, and tears it down.
 
+CI does not invoke both at every point. A pull request gets `make ci` and nothing else; `make test-e2e` runs when a change lands on `dev` or on `main`. So a green pull request says nothing about the end-to-end layer, and running `make test-e2e` before pushing is what closes that. `docs/architecture/integration.md` states which checks run where.
+
 ## Running the operator
 
 Against the cluster in the current kubecontext, with the manager on your machine:
