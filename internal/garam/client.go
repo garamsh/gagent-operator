@@ -1,6 +1,7 @@
 package garam
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -45,10 +46,10 @@ func NewClient(address string, tlsConfig *tls.Config) *Client {
 }
 
 // ListDefinitions returns the definitions naming this operator, with the agent
-// GRN each minted and whether it is already claimed.
+// GRN each minted and the claim standing on it where there is one.
 func (c *Client) ListDefinitions(ctx context.Context) ([]Definition, error) {
 	var answered []definitionPayload
-	if err := c.send(ctx, http.MethodGet, "/definitions", &answered); err != nil {
+	if err := c.send(ctx, http.MethodGet, "/definitions", nil, &answered); err != nil {
 		return nil, fmt.Errorf("list the definitions garam holds for this operator: %w", err)
 	}
 	definitions := make([]Definition, 0, len(answered))
@@ -67,7 +68,7 @@ func (c *Client) ListDefinitions(ctx context.Context) ([]Definition, error) {
 // holds a claim for answers [ErrClaimConflict], which no retry changes.
 func (c *Client) ClaimDefinition(ctx context.Context, agent GRN) (Assignment, error) {
 	var answered assignmentPayload
-	err := c.send(ctx, http.MethodPost, "/definitions/"+url.PathEscape(string(agent))+"/claim", &answered)
+	err := c.send(ctx, http.MethodPost, "/definitions/"+url.PathEscape(string(agent))+"/claim", nil, &answered)
 
 	var refused *refusal
 	if errors.As(err, &refused) && refused.status == http.StatusConflict {
@@ -88,7 +89,7 @@ func (c *Client) ClaimDefinition(ctx context.Context, agent GRN) (Assignment, er
 // obtainable again: store it before treating it as obtained.
 func (c *Client) IssueAgentCertificate(ctx context.Context, agent GRN) (AgentCredential, error) {
 	var answered agentCredentialPayload
-	err := c.send(ctx, http.MethodPost, "/agents/"+url.PathEscape(string(agent))+"/certificate", &answered)
+	err := c.send(ctx, http.MethodPost, "/agents/"+url.PathEscape(string(agent))+"/certificate", nil, &answered)
 
 	var refused *refusal
 	if errors.As(err, &refused) && refused.status == http.StatusForbidden {
@@ -98,6 +99,41 @@ func (c *Client) IssueAgentCertificate(ctx context.Context, agent GRN) (AgentCre
 		return AgentCredential{}, fmt.Errorf("issue a certificate for %s: %w", agent, err)
 	}
 	return answered.agentCredential()
+}
+
+// ReportProvisioningState tells garam what this operator sees of an agent's pod.
+// garam learns it here and nowhere else: it dials no cluster and reads no pod
+// (garam@e1e69fd:api/machine.yaml:201-231).
+//
+// epoch is the epoch this operator holds the agent at, and garam accepts the
+// report only at the epoch the assignment is currently on. A later one answers
+// [ErrReportStale]; an agent this operator is not assigned to and one that does
+// not exist answer [ErrAgentNotHeld], identically, so a caller learns nothing
+// from which it got.
+//
+// The state garam records is a latch it never expires, so what this writes
+// stands until it is written again and is evidence of what this operator saw
+// rather than evidence that this operator is still there.
+func (c *Client) ReportProvisioningState(ctx context.Context, agent GRN, epoch int64, state ProvisioningState) error {
+	report := provisioningStateReport{Epoch: epoch, State: string(state)}
+	err := c.send(ctx, http.MethodPost, "/agents/"+url.PathEscape(string(agent))+"/provisioning-state", report, nil)
+
+	// Discriminated the way each refusal allows: by kind where garam answers one
+	// status for two facts, as RenewIdentity does, and by status where it
+	// answers one fact, as IssueAgentCertificate does for this same 403.
+	var refused *refusal
+	if errors.As(err, &refused) {
+		switch {
+		case refused.kind == kindFailedPrecondition:
+			return fmt.Errorf("report %s at epoch %d: %w", agent, epoch, ErrReportStale)
+		case refused.status == http.StatusForbidden:
+			return fmt.Errorf("report %s at epoch %d: %w", agent, epoch, ErrAgentNotHeld)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("report %s at epoch %d: %w", agent, epoch, err)
+	}
+	return nil
 }
 
 // garam tells its refusals apart by kind rather than by status: a renewal
@@ -122,7 +158,7 @@ const (
 // this call's to do.
 func (c *Client) RenewIdentity(ctx context.Context) (Credential, error) {
 	var answered credentialPayload
-	err := c.send(ctx, http.MethodPost, "/identity/certificate", &answered)
+	err := c.send(ctx, http.MethodPost, "/identity/certificate", nil, &answered)
 
 	var refused *refusal
 	if errors.As(err, &refused) {
@@ -139,12 +175,27 @@ func (c *Client) RenewIdentity(ctx context.Context) (Credential, error) {
 	return answered.credential()
 }
 
-// send performs one request against the machine listener and decodes what it
-// answered into out.
-func (c *Client) send(ctx context.Context, method, path string, out any) error {
-	request, err := http.NewRequestWithContext(ctx, method, "https://"+c.address+path, nil)
+// send performs one request against the machine listener, carrying body where
+// there is one, and decodes what it answered into out.
+//
+// A nil body sends none and a nil out reads none: a route that records
+// something answers 204 and has nothing to decode.
+func (c *Client) send(ctx context.Context, method, path string, body, out any) error {
+	var payload io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("render what this operator is telling garam: %w", err)
+		}
+		payload = bytes.NewReader(encoded)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, method, "https://"+c.address+path, payload)
 	if err != nil {
 		return err
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -152,14 +203,17 @@ func (c *Client) send(ctx context.Context, method, path string, out any) error {
 	}
 	defer func() { _ = response.Body.Close() }()
 
-	body, err := io.ReadAll(response.Body)
+	answered, err := io.ReadAll(response.Body)
 	if err != nil {
 		return err
 	}
 	if response.StatusCode >= http.StatusBadRequest {
-		return refusalFrom(response.StatusCode, body)
+		return refusalFrom(response.StatusCode, answered)
 	}
-	if err := json.Unmarshal(body, out); err != nil {
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(answered, out); err != nil {
 		return fmt.Errorf("decode what garam answered: %w", err)
 	}
 	return nil
@@ -193,6 +247,14 @@ func refusalFrom(status int, body []byte) *refusal {
 	return &refusal{status: status, kind: answered.Kind, message: answered.Message}
 }
 
+// provisioningStateReport is what this operator sends the machine listener about
+// an agent's pod. Both fields are required and garam refuses an epoch below 1
+// (garam@e1e69fd:api/machine.yaml:617-634).
+type provisioningStateReport struct {
+	Epoch int64  `json:"epoch"`
+	State string `json:"state"`
+}
+
 // definitionPayload is one definition as the machine listener answers it.
 type definitionPayload struct {
 	AgentGRN string            `json:"agentGrn"`
@@ -208,11 +270,14 @@ func (p definitionPayload) definition() (Definition, error) {
 	if p.AgentGRN == "" {
 		return Definition{}, errors.New("a definition garam answered names no agent")
 	}
-	return Definition{
-		Agent:   GRN(p.AgentGRN),
-		Values:  p.Values,
-		Claimed: p.Claim != nil,
-	}, nil
+	definition := Definition{Agent: GRN(p.AgentGRN), Values: p.Values}
+	if p.Claim != nil {
+		if p.Claim.Epoch < 1 {
+			return Definition{}, fmt.Errorf("a definition garam answered claims %s at no epoch", p.AgentGRN)
+		}
+		definition.Claim = &Claim{Epoch: p.Claim.Epoch}
+	}
+	return definition, nil
 }
 
 // assignmentPayload is an assignment as the machine listener answers it.

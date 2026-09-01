@@ -61,7 +61,7 @@ func main() {
 	var garamAddress, garamCertificateFile, garamKeyFile, garamTrustFile string
 	var garamCredentialSecret string
 	var agentImage, agentStorageSize, agentCopyImage string
-	var garamPollInterval, garamRenewalInterval time.Duration
+	var garamPollInterval, garamRenewalInterval, garamReportInterval time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -91,6 +91,9 @@ func main() {
 			"issuer an operator's own certificate arrives with.")
 	flag.DurationVar(&garamPollInterval, "garam-poll-interval", time.Minute,
 		"How often this operator reads the definitions garam holds for it.")
+	flag.DurationVar(&garamReportInterval, "garam-report-interval", time.Minute,
+		"How often this operator tells garam what it sees of its agents' pods. garam expires no report, "+
+			"so this bounds how stale that picture gets while this operator is running and not after it stops.")
 	flag.StringVar(&garamCredentialSecret, "garam-credential-secret", "",
 		"The Secret in this Pod's own namespace holding the certificate and key named above, "+
 			"which a renewal is written back to. Unset leaves this operator renewing nothing.")
@@ -262,6 +265,10 @@ func main() {
 			setupLog.Error(err, "Failed to add the garam poller", "address", garamAddress)
 			os.Exit(1)
 		}
+		if err := mgr.Add(garam.NewReporter(garamClient, builder, garamReportInterval)); err != nil {
+			setupLog.Error(err, "Failed to add the garam reporter", "address", garamAddress)
+			os.Exit(1)
+		}
 		if garamCredentialSecret != "" {
 			// The Secret's keys are the names the kubelet gives the files in
 			// the volume, which is what the two flags above already point at.
@@ -276,7 +283,7 @@ func main() {
 			setupLog.Info("Renewing nothing: garam-credential-secret is unset")
 		}
 	} else {
-		setupLog.Info("Reading no definitions: garam-address is unset")
+		setupLog.Info("Reading no definitions and reporting nothing: garam-address is unset")
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

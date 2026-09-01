@@ -27,6 +27,10 @@ const (
 
 	sampleAgent = garam.GRN("grn:acme:default:agent:9f2ac1b40d8e7a35")
 	otherAgent  = garam.GRN("grn:acme:default:agent:0a1b2c3d4e5f6071")
+
+	// sampleEpoch is the epoch garam holds an assignment at. It is above 1 so
+	// that a test cannot pass on a zero value that happened to match.
+	sampleEpoch = int64(7)
 )
 
 // sampleCredential is what garam answers the certificate route with, in the
@@ -73,7 +77,7 @@ func TestConstructBuildsTheAgentFromTheOperatorsOwnConfiguration(t *testing.T) {
 	scheme := newScheme(t)
 	c := newClient(scheme)
 
-	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleCredential)
+	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	constructed := &agentv1alpha1.Agent{}
@@ -86,6 +90,25 @@ func TestConstructBuildsTheAgentFromTheOperatorsOwnConfiguration(t *testing.T) {
 	g.Expect(constructed.Status.Agent).To(Equal(string(sampleAgent)))
 }
 
+// TestConstructRecordsTheEpochGaramHoldsTheAgentAt is what makes a report to
+// garam possible at all. A definition is claimed once, so an operator that did
+// not record the epoch here has no route left that answers the one it holds the
+// agent at, and every report it sends afterwards is refused.
+func TestConstructRecordsTheEpochGaramHoldsTheAgentAt(t *testing.T) {
+	g := NewWithT(t)
+	scheme := newScheme(t)
+	c := newClient(scheme)
+
+	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	constructed := &agentv1alpha1.Agent{}
+	g.Expect(c.Get(context.Background(),
+		client.ObjectKey{Namespace: namespace, Name: constructor.Name(sampleAgent)}, constructed)).To(Succeed())
+
+	g.Expect(constructed.Status.Epoch).To(Equal(sampleEpoch))
+}
+
 // TestConstructPlacesEveryPartOfTheCredentialUnderItsOwnKey is what keeps the
 // issuer and the server root apart. They are different certificates and an
 // agent that verifies garam by the issuer cannot reach it at all, so each is
@@ -95,7 +118,7 @@ func TestConstructPlacesEveryPartOfTheCredentialUnderItsOwnKey(t *testing.T) {
 	scheme := newScheme(t)
 	c := newClient(scheme)
 
-	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleCredential)
+	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	secret := &corev1.Secret{}
@@ -118,7 +141,7 @@ func TestConstructOwnsTheCredentialByTheAgentItBelongsTo(t *testing.T) {
 	scheme := newScheme(t)
 	c := newClient(scheme)
 
-	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleCredential)
+	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	secret := &corev1.Secret{}
@@ -140,7 +163,7 @@ func TestHasCredentialReportsWhatTheNamespaceCarries(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(placed).To(BeFalse())
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
 
 	placed, err = building.HasCredential(context.Background(), sampleAgent)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -163,12 +186,12 @@ func TestConstructReplacesNoCredentialItAlreadyPlaced(t *testing.T) {
 	c := newClient(scheme)
 	building := newConstructor(t, scheme, c)
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
 
 	renewed := sampleCredential
 	renewed.CertificatePEM = []byte("a certificate the agent renewed for itself")
 	renewed.KeyPEM = []byte("the key it was renewed with")
-	g.Expect(building.Construct(context.Background(), sampleAgent, renewed)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, renewed)).To(Succeed())
 
 	secret := &corev1.Secret{}
 	g.Expect(c.Get(context.Background(), client.ObjectKey{
@@ -184,8 +207,8 @@ func TestConstructAdoptsTheAgentItAlreadyBuilt(t *testing.T) {
 	c := newClient(scheme)
 	building := newConstructor(t, scheme, c)
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleCredential)).To(Succeed())
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
 
 	agents := &agentv1alpha1.AgentList{}
 	g.Expect(c.List(context.Background(), agents, client.InNamespace(namespace))).To(Succeed())
@@ -215,7 +238,7 @@ func TestHasCredentialReportsNothingHeldWhereOnlyTheAgentWasBuilt(t *testing.T) 
 		}).Build()
 	building := newConstructor(t, scheme, refusing)
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleCredential)).To(MatchError(errAPIRefusal))
+	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(MatchError(errAPIRefusal))
 
 	// The Agent stands, so that the answer below is the credential and not an
 	// agent that was never built.
@@ -246,7 +269,7 @@ func TestConstructReportsWhatTheAPIRefused(t *testing.T) {
 			},
 		}).Build()
 
-	err := newConstructor(t, scheme, refusing).Construct(context.Background(), sampleAgent, sampleCredential)
+	err := newConstructor(t, scheme, refusing).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
 
 	g.Expect(err).To(MatchError(errAPIRefusal))
 	g.Expect(err).To(MatchError(ContainSubstring(string(sampleAgent))))
@@ -283,7 +306,7 @@ func TestConstructNamesTheAgentInTheOperatorsOwnNamespace(t *testing.T) {
 	c := newClient(scheme)
 
 	g.Expect(newConstructor(t, scheme, c).
-		Construct(context.Background(), sampleAgent, sampleCredential)).To(Succeed())
+		Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
 
 	agents := &agentv1alpha1.AgentList{}
 	g.Expect(c.List(context.Background(), agents)).To(Succeed())

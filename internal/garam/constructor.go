@@ -14,10 +14,15 @@ type Constructor interface {
 	// certificate it has nowhere to put.
 	HasCredential(ctx context.Context, agent GRN) (bool, error)
 
-	// Construct creates the Agent for a claimed definition and places
-	// credential where that Agent's workload reads it. It is the step that
-	// makes the credential obtained: garam keeps no private key and has already
-	// moved on, so one this fails to store is recovered by asking for another
-	// certificate and never by retrying the write.
-	Construct(ctx context.Context, agent GRN, credential AgentCredential) error
+	// Construct creates the Agent for a claimed definition, records the epoch
+	// garam holds the agent at on it, and places credential where that Agent's
+	// workload reads it. It is the step that makes the credential obtained:
+	// garam keeps no private key and has already moved on, so one this fails to
+	// store is recovered by asking for another certificate and never by
+	// retrying the write.
+	//
+	// epoch is recorded because a report to garam carries it and nothing else
+	// answers it later: a definition's claim reports whichever assignment
+	// stands, and a claim is not repeatable.
+	Construct(ctx context.Context, agent GRN, epoch int64, credential AgentCredential) error
 }

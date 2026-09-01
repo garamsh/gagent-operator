@@ -52,15 +52,21 @@ func (p *Poller) poll(ctx context.Context) {
 	log.V(1).Info("Read the definitions garam holds for this operator", "count", len(definitions))
 
 	for _, definition := range definitions {
-		if !definition.Claimed && !p.claim(ctx, definition.Agent) {
-			continue
+		claim := definition.Claim
+		if claim == nil {
+			assignment, held := p.claim(ctx, definition.Agent)
+			if !held {
+				continue
+			}
+			claim = &Claim{Epoch: assignment.Epoch}
 		}
-		p.construct(ctx, definition.Agent)
+		p.construct(ctx, definition.Agent, claim.Epoch)
 	}
 }
 
-// claim binds this operator to agent and reports whether it now holds it.
-func (p *Poller) claim(ctx context.Context, agent GRN) bool {
+// claim binds this operator to agent and returns the assignment it now holds,
+// reporting whether it holds one at all.
+func (p *Poller) claim(ctx context.Context, agent GRN) (Assignment, bool) {
 	log := logf.FromContext(ctx).WithName("garam")
 
 	assignment, err := p.client.ClaimDefinition(ctx, agent)
@@ -69,13 +75,13 @@ func (p *Poller) claim(ctx context.Context, agent GRN) bool {
 		// Terminal rather than retryable: a definition is claimed once, so
 		// the claim this operator holds is not one it can take again.
 		log.Error(err, "Refused a claim garam already holds", "agent", agent)
-		return false
+		return Assignment{}, false
 	case err != nil:
 		log.Error(err, "Failed to claim a definition", "agent", agent)
-		return false
+		return Assignment{}, false
 	}
 	log.Info("Claimed a definition", "agent", assignment.Agent, "epoch", assignment.Epoch)
-	return true
+	return assignment, true
 }
 
 // construct builds the agent a claim admits this operator to, where the cluster
@@ -85,7 +91,16 @@ func (p *Poller) claim(ctx context.Context, agent GRN) bool {
 // at once: garam generates the private key per certificate and stores none, so
 // a credential that reaches nothing is gone. What recovers one is another
 // certificate rather than another write, which the next pass asks for.
-func (p *Poller) construct(ctx context.Context, agent GRN) {
+//
+// This is also the only place epoch is written, and it is written because the
+// certificate route just proved it: that route answers for an agent assigned to
+// this operator at the current epoch and refuses every other caller, so an
+// answer here means the epoch in hand is the one this operator holds the agent
+// at. Nowhere else can say that. A definition's claim reports the assignment's
+// epoch whoever holds it, so an epoch refreshed from a later poll would read
+// current however long ago this operator was replaced — and a report carrying
+// it could never be found stale, which is what the epoch is on the report for.
+func (p *Poller) construct(ctx context.Context, agent GRN, epoch int64) {
 	log := logf.FromContext(ctx).WithName("garam")
 
 	placed, err := p.constructor.HasCredential(ctx, agent)
@@ -110,10 +125,10 @@ func (p *Poller) construct(ctx context.Context, agent GRN) {
 		return
 	}
 
-	if err := p.constructor.Construct(ctx, agent, credential); err != nil {
+	if err := p.constructor.Construct(ctx, agent, epoch, credential); err != nil {
 		log.Error(err, "Lost a certificate garam issued an agent: it exists nowhere else, and the next "+
 			"pass asks for another rather than retrying this write", "agent", agent)
 		return
 	}
-	log.Info("Constructed an agent", "agent", agent, "notAfter", credential.NotAfter)
+	log.Info("Constructed an agent", "agent", agent, "epoch", epoch, "notAfter", credential.NotAfter)
 }
