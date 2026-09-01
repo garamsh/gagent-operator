@@ -164,6 +164,25 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 			Eventually(verifyMetricsServerStarted, 3*time.Minute, time.Second).Should(Succeed())
 
+			// The base sets no --garam-address, and an operator without one
+			// makes no outbound call: it reads no definitions and reports
+			// nothing. This is the deployed binary saying so, which is where
+			// the flag is actually parsed.
+			By("verifying that an operator given no garam address reaches garam not at all")
+			verifyNoGaramTraffic := func(g Gomega) {
+				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				// The control: a line this manager does log, so that the two
+				// absences below are read against a log that was there to read.
+				g.Expect(output).To(ContainSubstring("Starting workers"),
+					"The manager has not started its controllers yet")
+				g.Expect(output).To(ContainSubstring("Reading no definitions and reporting nothing"))
+				g.Expect(output).NotTo(ContainSubstring("Polling garam for definitions"))
+				g.Expect(output).NotTo(ContainSubstring("Reporting what this operator sees"))
+			}
+			Eventually(verifyNoGaramTraffic, 3*time.Minute, time.Second).Should(Succeed())
+
 			// +kubebuilder:scaffold:e2e-metrics-webhooks-readiness
 
 			By("creating the curl-metrics pod to access the metrics endpoint")

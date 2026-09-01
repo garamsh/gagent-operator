@@ -36,8 +36,8 @@ func TestClientListDefinitionsReadsTheAgentValuesAndClaimGaramAnswers(t *testing
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(definitions).To(Equal([]garam.Definition{
-		{Agent: sampleAgent, Values: map[string]string{"model": "haiku"}, Claimed: false},
-		{Agent: "grn:acme:default:agent:0a1b2c3d4e5f6071", Values: map[string]string{}, Claimed: true},
+		{Agent: sampleAgent, Values: map[string]string{"model": "haiku"}, Claim: nil},
+		{Agent: "grn:acme:default:agent:0a1b2c3d4e5f6071", Values: map[string]string{}, Claim: &garam.Claim{Epoch: 3}},
 	}))
 	g.Expect(stub.requests()).To(HaveLen(1))
 	g.Expect(stub.requests()[0].method).To(Equal(http.MethodGet))
@@ -198,4 +198,94 @@ func trustedBy(t *testing.T, stub *stubListener) *tls.Config {
 		t.Fatalf("configure mutual TLS against the stub listener: %v", err)
 	}
 	return tlsConfig
+}
+
+// TestClientListDefinitionsRefusesAClaimAtNoEpoch keeps a claim and the epoch
+// it stands at together. A report to garam carries that epoch, so a claim
+// answered without one is a definition this operator could construct and never
+// report on — a gap that would surface a poll interval later and far from here.
+func TestClientListDefinitionsRefusesAClaimAtNoEpoch(t *testing.T) {
+	g := NewWithT(t)
+	answer := `[{"agentGrn": "` + string(sampleAgent) + `", "values": {}, "claim": {"epoch": 4}}]`
+	stub := newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
+		answerJSON(w, http.StatusOK, answer)
+	})
+	client := garam.NewClient(stub.address(), trustedBy(t, stub))
+
+	// The answer that is read, so that the refusal below is the missing epoch
+	// and not the claim being present at all.
+	definitions, err := client.ListDefinitions(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(definitions[0].Claim).To(Equal(&garam.Claim{Epoch: 4}))
+
+	answer = `[{"agentGrn": "` + string(sampleAgent) + `", "values": {}, "claim": {}}]`
+	_, err = client.ListDefinitions(context.Background())
+	g.Expect(err).To(MatchError(ContainSubstring("at no epoch")))
+}
+
+func TestClientReportProvisioningStateSendsTheEpochAndTheStateItObserved(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	err := garam.NewClient(stub.address(), trustedBy(t, stub)).
+		ReportProvisioningState(context.Background(), sampleAgent, 7, garam.StateReady)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(stub.requests()).To(HaveLen(1))
+	g.Expect(stub.requests()[0].method).To(Equal(http.MethodPost))
+	g.Expect(stub.requests()[0].path).To(Equal("/agents/" + string(sampleAgent) + "/provisioning-state"))
+	g.Expect(stub.requests()[0].body).To(MatchJSON(`{"epoch": 7, "state": "ready"}`))
+}
+
+// TestClientReportProvisioningStateReportsAStaleEpochAsStale is what makes the
+// epoch on a report worth carrying. garam refuses a report at an epoch the
+// assignment has moved past, and a caller that could not tell that refusal from
+// any other would have no way to know its record of the agent is behind.
+func TestClientReportProvisioningStateReportsAStaleEpochAsStale(t *testing.T) {
+	g := NewWithT(t)
+	stale := true
+	stub := newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
+		if !stale {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		answerJSON(w, http.StatusConflict,
+			`{"kind": "failed_precondition", "message": "the assignment is at a later epoch"}`)
+	})
+	client := garam.NewClient(stub.address(), trustedBy(t, stub))
+
+	err := client.ReportProvisioningState(context.Background(), sampleAgent, 1, garam.StateReady)
+	g.Expect(err).To(MatchError(garam.ErrReportStale))
+
+	// The same call against a listener that accepts it, so that what the
+	// refusal above rests on is the answer and not the request.
+	stale = false
+	g.Expect(client.ReportProvisioningState(context.Background(), sampleAgent, 1, garam.StateReady)).To(Succeed())
+}
+
+// TestClientReportProvisioningStateReportsAnAgentItDoesNotHoldAsNotHeld pairs
+// with the certificate route, which garam refuses the same way. An agent
+// assigned elsewhere and one that does not exist answer identically here, so
+// this maps both to the one error that says so.
+func TestClientReportProvisioningStateReportsAnAgentItDoesNotHoldAsNotHeld(t *testing.T) {
+	g := NewWithT(t)
+	refuse := true
+	stub := newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
+		if !refuse {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		answerJSON(w, http.StatusForbidden,
+			`{"kind": "permission_denied", "message": "agent is not assigned to this operator"}`)
+	})
+	client := garam.NewClient(stub.address(), trustedBy(t, stub))
+
+	err := client.ReportProvisioningState(context.Background(), sampleAgent, 7, garam.StateProvisioned)
+	g.Expect(err).To(MatchError(garam.ErrAgentNotHeld))
+	g.Expect(err).NotTo(MatchError(garam.ErrReportStale))
+
+	refuse = false
+	g.Expect(client.ReportProvisioningState(context.Background(), sampleAgent, 7, garam.StateProvisioned)).To(Succeed())
 }

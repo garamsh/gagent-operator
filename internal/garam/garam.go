@@ -23,10 +23,24 @@ type Definition struct {
 	// operator's contract rather than garam's.
 	Values map[string]string
 
-	// Claimed reports whether the definition is already claimed. garam admits no
-	// claimant but the operator a definition names, so a claim it reports here
-	// is this operator's own.
-	Claimed bool
+	// Claim is the agent's assignment where the definition is claimed, and nil
+	// where it is not. garam admits no claimant but the operator a definition
+	// names, so a claim it reports here was made by this operator.
+	Claim *Claim
+}
+
+// Claim is the assignment a definition's claim wrote, as garam reports it now.
+//
+// It is one value rather than a flag beside an epoch, because the two cannot be
+// true separately: a definition is claimed exactly when there is an epoch to
+// report for it.
+type Claim struct {
+	// Epoch is the epoch the agent's assignment holds at now, which is not
+	// necessarily the one this operator holds the agent at. A definition names
+	// its operator once and is never rewritten, so it stays listed and stays
+	// claimed after the agent is assigned elsewhere, carrying whoever holds it
+	// by then (garam@e1e69fd:api/machine.yaml:322-330).
+	Epoch int64
 }
 
 // Assignment binds an agent to the operator that runs it, and is what admits
@@ -82,6 +96,82 @@ var ErrAgentNotHeld = errors.New("garam holds this agent for another operator, o
 // answers. A definition is claimed once and a second claim is a conflict rather
 // than an override, so retrying one changes nothing.
 var ErrClaimConflict = errors.New("garam holds a claim on this agent already")
+
+// ErrReportStale is what garam answers a provisioning report carrying an epoch
+// the agent's assignment has moved past. It says this operator holds the agent
+// at an epoch that is no longer current, which is a different fact from
+// [ErrAgentNotHeld]: that one says the agent is assigned elsewhere or does not
+// exist, and this one says the assignment moved and came back
+// (garam@e1e69fd:api/machine.yaml:213-220).
+//
+// Neither is retryable. No route answers the epoch this operator holds an agent
+// at, and a definition's claim answers the assignment's rather than this
+// operator's, so nothing recovers a stale one.
+var ErrReportStale = errors.New("garam holds this agent at an epoch later than the one reported")
+
+// ProvisioningState is what this operator tells garam it sees of an agent's pod.
+//
+// garam's enum carries four values and this operator sends two of them
+// (garam@e1e69fd:api/machine.yaml:605-610). The other two are out of reach
+// rather than unimplemented:
+//
+//   - "pending" is garam's word for an agent no operator has reported on yet.
+//     It is the value garam already holds before any report, so an operator
+//     reaches it by staying silent; sending it would assert that this operator
+//     has never reported while being a report.
+//   - "failed" needs telling a replica that cannot start from one that has not
+//     started yet. What this operator reads is the workload's ready replica
+//     count, which covers both and says neither, so a report of "failed" would
+//     assert more than was observed.
+type ProvisioningState string
+
+const (
+	// StateProvisioned is an agent whose workload this operator built and which
+	// reports no ready replica. It says the pod was provisioned and nothing
+	// about its health, which is the whole of what a replica count carries when
+	// it reads zero.
+	StateProvisioned ProvisioningState = "provisioned"
+
+	// StateReady is an agent whose workload reports a ready replica. A replica
+	// is ready once its containers are running and this workload carries no
+	// readiness probe, so this says the agent's containers are running and
+	// nothing about whether the agent inside them works.
+	StateReady ProvisioningState = "ready"
+)
+
+// Readiness is what this operator observed of an agent's workload, which is the
+// only input the state it reports is decided from.
+type Readiness int
+
+const (
+	// ReadinessUnobserved is an agent whose workload this operator did not read.
+	// It is the zero value because an Observation that says nothing observed
+	// nothing.
+	ReadinessUnobserved Readiness = iota
+
+	// ReadinessNoReplica is a workload reporting no ready replica, which covers
+	// a replica still starting as much as one that cannot start.
+	ReadinessNoReplica
+
+	// ReadinessReplicaReady is a workload reporting a ready replica.
+	ReadinessReplicaReady
+)
+
+// Observation is what this operator holds about one agent it constructed: the
+// identity garam minted, the epoch it was constructed at, and what its workload
+// was last seen to report.
+type Observation struct {
+	// Agent is the agent this operator constructed for.
+	Agent GRN
+
+	// Epoch is the assignment epoch garam held the agent at when this operator
+	// constructed it. A report carries it and garam accepts the report only at
+	// the epoch the assignment is currently on.
+	Epoch int64
+
+	// Readiness is what the workload was last observed to report.
+	Readiness Readiness
+}
 
 // Credential is what this operator authenticates to garam as: the certificate
 // and the private key it was issued with. garam stores no private key, so a

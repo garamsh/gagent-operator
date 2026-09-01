@@ -1,6 +1,7 @@
 package garam_test
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -38,6 +40,10 @@ type stubListener struct {
 type stubRequest struct {
 	method string
 	path   string
+
+	// body is what the request carried, which is empty on the routes that send
+	// none.
+	body string
 
 	// client is the common name of the certificate the request presented.
 	client string
@@ -82,8 +88,17 @@ func (s *stubListener) requests() []stubRequest {
 	return append([]stubRequest(nil), s.seen...)
 }
 
+// record notes one request. It reads the body and puts it back, because the
+// handler behind this reads the same request.
 func (s *stubListener) record(r *http.Request) {
 	request := stubRequest{method: r.Method, path: r.URL.Path}
+	if r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			request.body = string(body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+	}
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		request.client = r.TLS.PeerCertificates[0].Subject.CommonName
 	}

@@ -87,6 +87,20 @@ type AgentStatus struct {
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	Agent string `json:"agent,omitempty"`
+
+	// epoch is the assignment epoch garam held this agent at when this operator
+	// constructed it, and is absent on an Agent a user wrote. It rises with every
+	// assignment, and garam accepts a report about an agent only at the epoch the
+	// assignment is currently on, so a report this operator sends carries this
+	// value and is refused once the agent has been assigned again.
+	//
+	// It is recorded where garam's certificate route proved it and is never
+	// refreshed afterwards. A value re-read later would be whatever epoch the
+	// assignment stands at, which is current whoever holds the agent by then, and
+	// a report carrying it could never be found stale.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	Epoch int64 `json:"epoch,omitempty"`
 }
 
 // ConditionSynced is the condition type reporting whether the cluster carries

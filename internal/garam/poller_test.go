@@ -42,13 +42,21 @@ type recordingConstructor struct {
 	// placed is the agents whose credential the cluster already carries.
 	placed map[garam.GRN]garam.AgentCredential
 
+	// epochs is the epoch each agent was constructed at, which is what a
+	// report to garam later carries.
+	epochs map[garam.GRN]int64
+
 	// refusePlacement is what Construct answers instead of placing the
 	// credential, where it is set.
 	refusePlacement error
 }
 
 func newRecordingConstructor() *recordingConstructor {
-	return &recordingConstructor{built: map[garam.GRN]bool{}, placed: map[garam.GRN]garam.AgentCredential{}}
+	return &recordingConstructor{
+		built:  map[garam.GRN]bool{},
+		placed: map[garam.GRN]garam.AgentCredential{},
+		epochs: map[garam.GRN]int64{},
+	}
 }
 
 func (c *recordingConstructor) HasCredential(_ context.Context, agent garam.GRN) (bool, error) {
@@ -58,15 +66,25 @@ func (c *recordingConstructor) HasCredential(_ context.Context, agent garam.GRN)
 	return placed, nil
 }
 
-func (c *recordingConstructor) Construct(_ context.Context, agent garam.GRN, credential garam.AgentCredential) error {
+func (c *recordingConstructor) Construct(_ context.Context, agent garam.GRN, epoch int64, credential garam.AgentCredential) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.built[agent] = true
+	c.epochs[agent] = epoch
 	if c.refusePlacement != nil {
 		return c.refusePlacement
 	}
 	c.placed[agent] = credential
 	return nil
+}
+
+// constructedAt is the epoch each agent was constructed at.
+func (c *recordingConstructor) constructedAt() map[garam.GRN]int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	held := map[garam.GRN]int64{}
+	maps.Copy(held, c.epochs)
+	return held
 }
 
 // credentials is what the constructor holds, by agent.
@@ -310,4 +328,36 @@ func TestPollerConstructsNothingForAnAgentGaramRefuses(t *testing.T) {
 	g.Eventually(func() map[garam.GRN]garam.AgentCredential { return constructor.credentials() }, pollTimeout).
 		Should(HaveKey(unclaimedAgent))
 	g.Expect(constructor.credentials()).NotTo(HaveKey(claimedAgent))
+}
+
+// TestPollerConstructsAtTheEpochGaramAnswered carries the value a report to
+// garam is fenced by. The epoch is met on the construct path and nowhere else,
+// and it reaches that path from two sources — the claim this pass made, and the
+// claim a previous process left standing — so the test holds both, at values
+// that cannot be confused for each other.
+func TestPollerConstructsAtTheEpochGaramAnswered(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			answerJSON(w, http.StatusOK, `[
+				{"agentGrn": "`+string(claimedAgent)+`", "values": {}, "claim": {"epoch": 9}},
+				{"agentGrn": "`+string(unclaimedAgent)+`", "values": {}}
+			]`)
+		case strings.HasSuffix(r.URL.Path, "/certificate"):
+			answerJSON(w, http.StatusCreated, `{
+				"grn": "x", "certificatePem": "a certificate", "privateKeyPem": "a key",
+				"issuerPem": "an issuer", "serverRootPem": "a root", "notAfter": "2026-08-26T15:01:43Z"
+			}`)
+		default:
+			answerJSON(w, http.StatusCreated, `{"grn": "`+string(unclaimedAgent)+`",
+				"operator": "grn:acme:default:operator:one", "epoch": 4}`)
+		}
+	})
+	constructor := newRecordingConstructor()
+
+	runPoller(t, stub, constructor)
+
+	g.Eventually(func() map[garam.GRN]int64 { return constructor.constructedAt() }, pollTimeout).
+		Should(Equal(map[garam.GRN]int64{claimedAgent: 9, unclaimedAgent: 4}))
 }
