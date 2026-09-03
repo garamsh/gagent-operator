@@ -40,12 +40,14 @@ const (
 // Agent is constructed here and the definition carries no name for it.
 const credentialsSecretSuffix = "-credentials"
 
-// Agent constructs the agents garam assigned this operator, and observes the
-// ones it has constructed.
+// Agent constructs the agents garam assigned this operator, keeps the image it
+// wrote for them current, and observes the ones it has constructed.
 //
 // Everything it puts in an Agent's spec beyond the credential's name is
 // configuration this operator was given: the image and the storage size are
-// properties of the cluster the agent runs in, which garam has never seen.
+// properties of the cluster the agent runs in, which garam has never seen. Being
+// the only writer of the image is also what makes correcting one this operator's
+// to do.
 //
 // It reads its own output back rather than a second store holding it: what a
 // report to garam carries is the epoch a construction recorded and the readiness
@@ -169,6 +171,49 @@ func (a *Agent) placeCredential(ctx context.Context, constructed *agentv1alpha1.
 		return fmt.Errorf("place the credential for %s: %w", constructed.Status.Agent, err)
 	}
 	return nil
+}
+
+// CorrectImage brings the image of the Agent constructed for agent to the one
+// this operator is configured with, and reports whether the field moved.
+//
+// Construction writes that field from this operator's configuration and nothing
+// else can, so an image corrected after an agent was built reaches it by no
+// other route: a definition is claimed once, and editing the spec by hand is the
+// defect one level down.
+//
+// What it writes is bounded by status.agent naming the same agent. That field
+// carries the GRN a construction recorded and is empty on an Agent a user wrote,
+// whose spec is theirs.
+func (a *Agent) CorrectImage(ctx context.Context, agent garam.GRN) (bool, error) {
+	constructed := &agentv1alpha1.Agent{}
+	err := a.client.Get(ctx, client.ObjectKey{Namespace: a.namespace, Name: Name(agent)}, constructed)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get the agent constructed for %s: %w", agent, err)
+	}
+	if constructed.Status.Agent != string(agent) {
+		return false, nil
+	}
+	if constructed.Spec.Image == a.image {
+		return false, nil
+	}
+
+	// A merge patch and not an update: an update carries the resource version
+	// this object was read at, so a status written between the read and the
+	// write refuses it. The patch names the one field this writer decided.
+	patch, err := json.Marshal(map[string]any{
+		"spec": map[string]any{"image": a.image},
+	})
+	if err != nil {
+		return false, fmt.Errorf("render the image of %s: %w", agent, err)
+	}
+	if err := a.client.Patch(ctx, constructed,
+		client.RawPatch(types.MergePatchType, patch)); err != nil {
+		return false, fmt.Errorf("correct the image of the agent constructed for %s: %w", agent, err)
+	}
+	return true, nil
 }
 
 // credentialsKey names the Secret an agent's workload mounts its credential

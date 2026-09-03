@@ -25,4 +25,14 @@ type Constructor interface {
 	// answers it later: a definition's claim reports whichever assignment
 	// stands, and a claim is not repeatable.
 	Construct(ctx context.Context, agent GRN, epoch int64, credential AgentCredential) error
+
+	// CorrectImage brings the image of an agent this operator already
+	// constructed to the one this operator is configured with, and reports
+	// whether the field moved. Construction is the only writer of that field,
+	// so an operator that wrote it once and left it there leaves a corrected
+	// configuration reaching every agent but the ones already built.
+	//
+	// An Agent this operator did not construct is left alone: its spec is its
+	// author's.
+	CorrectImage(ctx context.Context, agent GRN) (bool, error)
 }
