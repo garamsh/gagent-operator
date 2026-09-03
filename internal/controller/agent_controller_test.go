@@ -83,12 +83,24 @@ func createAgent(agent *agentv1alpha1.Agent) {
 // testCopyImage is what the specs expect on the credential's init container.
 const testCopyImage = "example.com/copy:v0.1.0"
 
-// reconcileAgent runs one reconcile for the named Agent.
+// testToolsImage is the image the specs expect an agent's tool tree to be
+// mounted from, where this operator names one.
+const testToolsImage = "example.com/tools:v0.1.0"
+
+// reconcileAgent runs one reconcile for the named Agent, with this operator
+// naming no tools image.
 func reconcileAgent(name string) (reconcile.Result, error) {
+	return reconcileAgentWithTools(name, "")
+}
+
+// reconcileAgentWithTools runs one reconcile for the named Agent, with this
+// operator carrying agents' tool tree in toolsImage.
+func reconcileAgentWithTools(name, toolsImage string) (reconcile.Result, error) {
 	reconciler := &AgentReconciler{
-		Client:    k8sClient,
-		Scheme:    k8sClient.Scheme(),
-		CopyImage: testCopyImage,
+		Client:     k8sClient,
+		Scheme:     k8sClient.Scheme(),
+		CopyImage:  testCopyImage,
+		ToolsImage: toolsImage,
 	}
 
 	return reconciler.Reconcile(ctx, reconcile.Request{

@@ -60,7 +60,7 @@ func main() {
 	var enableHTTP2 bool
 	var garamAddress, garamCertificateFile, garamKeyFile, garamTrustFile string
 	var garamCredentialSecret string
-	var agentImage, agentStorageSize, agentCopyImage string
+	var agentImage, agentStorageSize, agentCopyImage, agentToolsImage string
 	var garamPollInterval, garamRenewalInterval, garamReportInterval time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -111,6 +111,11 @@ func main() {
 			"volume the agent reads it from. It needs a shell and install, and nothing of the agent. It has "+
 			"no default and is always required: an agent whose credential arrives any other way is one its "+
 			"reader refuses.")
+	flag.StringVar(&agentToolsImage, "agent-tools-image", "",
+		"The image carrying the tool tree every agent this operator constructs loads its tools from. Every "+
+			"agent's Pod mounts it read-only, and the agent is pointed at where it is mounted. Unset builds "+
+			"agents' Pods carrying no tool tree at all, which is an agent whose tool registry refuses to "+
+			"start.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -220,10 +225,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Unset is a deployment that has decided nothing rather than one that is
+	// misconfigured, so it is said once here and nothing is built for it. An
+	// agent that finds no tool tree says the rest itself, by refusing to start.
+	if agentToolsImage == "" {
+		setupLog.Info("Building agents with no tool tree: agent-tools-image is unset")
+	}
+
 	if err := (&controller.AgentReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		CopyImage: agentCopyImage,
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		CopyImage:  agentCopyImage,
+		ToolsImage: agentToolsImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "agent")
 		os.Exit(1)

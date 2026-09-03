@@ -1,5 +1,6 @@
-# The three flags docs/architecture/configuration.md assigns to the deploying
-# overlay. The base sets none of them, so an appended argument is each flag's
+# Three of the four flags docs/architecture/configuration.md assigns to the
+# deploying overlay. The fourth, --agent-tools-image, names an image no registry
+# holds yet. The base sets none of them, so an appended argument is each flag's
 # only occurrence and no ordering decides which wins.
 - op: add
   path: /spec/template/spec/containers/0/args/-

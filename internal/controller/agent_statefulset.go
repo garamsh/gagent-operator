@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -26,12 +25,23 @@ const (
 	credentialsVolumeName       = "credentials"
 	credentialsSecretVolumeName = "credentials-secret"
 	stateVolumeName             = "state"
+	toolsVolumeName             = "tools"
 
 	// credentialsMountPath holds the copy the agent reads. credentialsSecretMountPath
 	// holds the projection the kubelet writes, and only the init container mounts it.
 	credentialsMountPath       = "/run/gagent/credentials"
 	credentialsSecretMountPath = "/etc/gagent/credentials"
 	stateMountPath             = "/var/lib/gagent"
+
+	// toolsMountPath is where the tool tree is mounted and what the agent is
+	// pointed at. It sits outside the state volume's path, which the agent
+	// writes and this tree is not part of.
+	toolsMountPath = "/opt/gagent/tools"
+
+	// toolsDirVariable names the environment variable gagent reads the directory
+	// it loads its tools from. The name is that project's, because this operator
+	// is writing that project's setting.
+	toolsDirVariable = "GAGENT_TOOLS_DIR"
 
 	// credentialsFileMode keeps the projected credential files readable by the
 	// group the Pod carries and by nothing else. A Secret volume's files are
@@ -91,7 +101,7 @@ func (r *AgentReconciler) reconcileStatefulSet(ctx context.Context, agent *agent
 	}
 
 	operation, err := controllerutil.CreateOrUpdate(ctx, r.Client, statefulSet, func() error {
-		return applyAgent(agent, statefulSet, r.CopyImage, r.Scheme)
+		return r.applyAgent(agent, statefulSet)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create or update statefulset: %w", err)
@@ -121,9 +131,11 @@ func claimedStorageSize(statefulSet *appsv1.StatefulSet) resource.Quantity {
 // applyAgent writes the fields an Agent's spec decides onto statefulSet and
 // leaves every other field as it found it, so that an unchanged Agent produces
 // an unchanged object. The fields a StatefulSet refuses a change to are written
-// at creation only. copyImage is the image the credential's init container runs
-// and comes from this operator's own configuration rather than from the Agent.
-func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, copyImage string, scheme *runtime.Scheme) error {
+// at creation only. What the workload carries that no Agent names — the image
+// the credential's init container runs and the image an agent's tools are
+// mounted from — is read off the reconciler, which is where this operator's
+// own configuration reaches the workload.
+func (r *AgentReconciler) applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet) error {
 	if statefulSet.CreationTimestamp.IsZero() {
 		labels := workloadLabels(agent)
 		statefulSet.Labels = labels
@@ -171,7 +183,7 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 	}}
 
 	credentials := containerNamed(&statefulSet.Spec.Template.Spec.InitContainers, credentialsContainerName)
-	credentials.Image = copyImage
+	credentials.Image = r.CopyImage
 	// Always on this operator's own ground: the copy image is the deployer's and
 	// nothing here requires its tag to name one build, so a node's cache would
 	// leave two agents copying a credential with different tools under one name.
@@ -200,8 +212,33 @@ func applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet, cop
 		{Name: credentialsVolumeName, MountPath: credentialsMountPath},
 		{Name: stateVolumeName, MountPath: stateMountPath},
 	}
+	// Written on every pass, so that an operator that stops naming a tools image
+	// stops pointing the agent at a tree the Pod no longer carries.
+	container.Env = nil
 
-	return controllerutil.SetControllerReference(agent, statefulSet, scheme)
+	// The whole of the tool tree, so that an operator naming no image builds the
+	// workload it built before one could be named.
+	if r.ToolsImage != "" {
+		statefulSet.Spec.Template.Spec.Volumes = append(statefulSet.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: toolsVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				// The kubelet mounts the image itself, so nothing copies the tree
+				// and the image carrying it needs no shell and nothing writable.
+				// Pulled at every start on the ground the init container's image
+				// is: the reference is the deployer's and its tag need name no one
+				// build, so a node's cache would leave two agents running different
+				// tools under one name.
+				Image: &corev1.ImageVolumeSource{Reference: r.ToolsImage, PullPolicy: corev1.PullAlways},
+			},
+		})
+		container.VolumeMounts = append(container.VolumeMounts,
+			corev1.VolumeMount{Name: toolsVolumeName, MountPath: toolsMountPath, ReadOnly: true})
+		// The variable is what points the agent at the tree; the image's own
+		// entrypoint is left to run what it runs.
+		container.Env = []corev1.EnvVar{{Name: toolsDirVariable, Value: toolsMountPath}}
+	}
+
+	return controllerutil.SetControllerReference(agent, statefulSet, r.Scheme)
 }
 
 // containerNamed returns the container called name out of containers, appending
