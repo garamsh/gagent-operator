@@ -9,6 +9,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,6 +25,10 @@ const (
 	namespace   = "gagent-operator-system"
 	image       = "registry.example/gagent:1.2.3"
 	storageSize = "3Gi"
+
+	// laterImage is what this operator is configured with after a corrected
+	// --agent-image, and differs from image in the tag alone.
+	laterImage = "registry.example/gagent:4.5.6"
 
 	sampleAgent = garam.GRN("grn:acme:default:agent:9f2ac1b40d8e7a35")
 	otherAgent  = garam.GRN("grn:acme:default:agent:0a1b2c3d4e5f6071")
@@ -317,4 +322,122 @@ func TestConstructNamesTheAgentInTheOperatorsOwnNamespace(t *testing.T) {
 	g.Expect(c.List(context.Background(), secrets)).To(Succeed())
 	g.Expect(secrets.Items).To(HaveLen(1))
 	g.Expect(secrets.Items[0].Namespace).To(Equal(namespace))
+}
+
+// newCorrector returns an Agent configured with the image a corrected
+// --agent-image now names, constructing through the same client as the one that
+// built the agents already there.
+func newCorrector(t *testing.T, scheme *runtime.Scheme, c client.Client) *constructor.Agent {
+	t.Helper()
+
+	return constructor.NewAgent(c, scheme, namespace, laterImage, resource.MustParse(storageSize))
+}
+
+// imageOf is what the cluster carries in the spec of the Agent constructed for
+// agent.
+func imageOf(t *testing.T, c client.Client, agent garam.GRN) string {
+	t.Helper()
+
+	constructed := &agentv1alpha1.Agent{}
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Namespace: namespace, Name: constructor.Name(agent)}, constructed); err != nil {
+		t.Fatalf("read the agent constructed for %s: %v", agent, err)
+	}
+	return constructed.Spec.Image
+}
+
+// TestCorrectImageBringsAConstructedAgentToTheOperatorsConfiguration is the
+// whole of what a corrected --agent-image is worth to an agent already built. A
+// definition is claimed once, so re-construction is not a route back, and the
+// only other one is editing a spec this operator authored by hand.
+func TestCorrectImageBringsAConstructedAgentToTheOperatorsConfiguration(t *testing.T) {
+	g := NewWithT(t)
+	scheme := newScheme(t)
+	c := newClient(scheme)
+
+	g.Expect(newConstructor(t, scheme, c).
+		Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(imageOf(t, c, sampleAgent)).To(Equal(image))
+
+	corrected, err := newCorrector(t, scheme, c).CorrectImage(context.Background(), sampleAgent)
+
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(corrected).To(BeTrue())
+	g.Expect(imageOf(t, c, sampleAgent)).To(Equal(laterImage))
+}
+
+// TestCorrectImageWritesNothingWhereTheImageIsAlreadyCurrent keeps a pass that
+// changes nothing from rolling the agent's Pod: the reconciler builds the
+// workload from spec.image, and a write on every poll would restart an agent
+// every interval.
+func TestCorrectImageWritesNothingWhereTheImageIsAlreadyCurrent(t *testing.T) {
+	g := NewWithT(t)
+	scheme := newScheme(t)
+	c := newClient(scheme)
+	correcting := newCorrector(t, scheme, c)
+
+	g.Expect(newConstructor(t, scheme, c).
+		Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+
+	// The first correction, so that the answer below is an image already current
+	// and not one this operator declined to write at all.
+	corrected, err := correcting.CorrectImage(context.Background(), sampleAgent)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(corrected).To(BeTrue())
+
+	corrected, err = correcting.CorrectImage(context.Background(), sampleAgent)
+
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(corrected).To(BeFalse())
+	g.Expect(imageOf(t, c, sampleAgent)).To(Equal(laterImage))
+}
+
+// TestCorrectImageLeavesTheSpecOfAnAgentThisOperatorDidNotConstructAlone says
+// what tells the two apart is status.agent and not the name. An Agent standing
+// at the name a GRN digests to, carrying no GRN of its own, is one a user wrote,
+// and its spec is theirs; the agent beside it is the control, constructed and
+// corrected through the same call, so the refusal is the guard rather than a
+// correction that never ran.
+func TestCorrectImageLeavesTheSpecOfAnAgentThisOperatorDidNotConstructAlone(t *testing.T) {
+	g := NewWithT(t)
+	scheme := newScheme(t)
+	c := newClient(scheme)
+	correcting := newCorrector(t, scheme, c)
+
+	written := &agentv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: constructor.Name(sampleAgent), Namespace: namespace},
+		Spec: agentv1alpha1.AgentSpec{
+			Image:                 "registry.example/an-image-its-author-chose:0.1.0",
+			CredentialsSecretName: "a-secret-its-author-named",
+			StorageSize:           resource.MustParse(storageSize),
+		},
+	}
+	g.Expect(c.Create(context.Background(), written)).To(Succeed())
+	g.Expect(newConstructor(t, scheme, c).
+		Construct(context.Background(), otherAgent, sampleEpoch, sampleCredential)).To(Succeed())
+
+	refused, err := correcting.CorrectImage(context.Background(), sampleAgent)
+	g.Expect(err).NotTo(HaveOccurred())
+	accepted, err := correcting.CorrectImage(context.Background(), otherAgent)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(refused).To(BeFalse())
+	g.Expect(imageOf(t, c, sampleAgent)).To(Equal("registry.example/an-image-its-author-chose:0.1.0"))
+	g.Expect(accepted).To(BeTrue())
+	g.Expect(imageOf(t, c, otherAgent)).To(Equal(laterImage))
+}
+
+// TestCorrectImageCorrectsNothingWhereNoAgentIsBuilt says a pass that reaches a
+// definition before its agent exists is not a failure: the construction below it
+// in the same pass is what builds one, with the configuration this would have
+// written.
+func TestCorrectImageCorrectsNothingWhereNoAgentIsBuilt(t *testing.T) {
+	g := NewWithT(t)
+	scheme := newScheme(t)
+	c := newClient(scheme)
+
+	corrected, err := newCorrector(t, scheme, c).CorrectImage(context.Background(), sampleAgent)
+
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(corrected).To(BeFalse())
 }

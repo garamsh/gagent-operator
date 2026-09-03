@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,6 +47,10 @@ type recordingConstructor struct {
 	// report to garam later carries.
 	epochs map[garam.GRN]int64
 
+	// stale is the agents whose spec carries an image this operator is no longer
+	// configured with, which is what a correction clears.
+	stale map[garam.GRN]bool
+
 	// refusePlacement is what Construct answers instead of placing the
 	// credential, where it is set.
 	refusePlacement error
@@ -56,6 +61,7 @@ func newRecordingConstructor() *recordingConstructor {
 		built:  map[garam.GRN]bool{},
 		placed: map[garam.GRN]garam.AgentCredential{},
 		epochs: map[garam.GRN]int64{},
+		stale:  map[garam.GRN]bool{},
 	}
 }
 
@@ -76,6 +82,23 @@ func (c *recordingConstructor) Construct(_ context.Context, agent garam.GRN, epo
 	}
 	c.placed[agent] = credential
 	return nil
+}
+
+func (c *recordingConstructor) CorrectImage(_ context.Context, agent garam.GRN) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.stale[agent] {
+		return false, nil
+	}
+	delete(c.stale, agent)
+	return true, nil
+}
+
+// stillStale is the agents whose image no correction has reached.
+func (c *recordingConstructor) stillStale() []garam.GRN {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Collect(maps.Keys(c.stale))
 }
 
 // constructedAt is the epoch each agent was constructed at.
@@ -328,6 +351,26 @@ func TestPollerConstructsNothingForAnAgentGaramRefuses(t *testing.T) {
 	g.Eventually(func() map[garam.GRN]garam.AgentCredential { return constructor.credentials() }, pollTimeout).
 		Should(HaveKey(unclaimedAgent))
 	g.Expect(constructor.credentials()).NotTo(HaveKey(claimedAgent))
+}
+
+// TestPollerCorrectsTheImageOfAnAgentItAlreadyBuilt is the repair a corrected
+// --agent-image could not make. The agent it reaches is one whose credential is
+// placed, which is where the poller stops asking garam for anything, so a
+// correction gated on construction would never run for the agents that need it.
+func TestPollerCorrectsTheImageOfAnAgentItAlreadyBuilt(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, answerDefinitionsAndCertificates(
+		`[{"agentGrn": "`+string(claimedAgent)+`", "values": {}, "claim": {"epoch": 1}}]`, ""))
+	constructor := newRecordingConstructor()
+	constructor.placed[claimedAgent] = garam.AgentCredential{}
+	constructor.stale[claimedAgent] = true
+
+	runPoller(t, stub, constructor)
+
+	g.Eventually(func() []garam.GRN { return constructor.stillStale() }, pollTimeout).Should(BeEmpty())
+	// Nothing was asked of garam for this agent, so the correction is the poller
+	// reaching an agent it already built and not a second construction.
+	g.Expect(certificatesAsked(stub)).To(BeEmpty())
 }
 
 // TestPollerConstructsAtTheEpochGaramAnswered carries the value a report to

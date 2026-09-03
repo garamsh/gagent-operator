@@ -11,7 +11,8 @@ import (
 
 // Poller reads this operator's definitions from garam on an interval, claims
 // the ones it has not claimed yet, and constructs an agent for each one it
-// holds a claim on.
+// holds a claim on, keeping the image of the ones it already built current with
+// this operator's configuration.
 //
 // It runs beside the reconcilers rather than inside one: what wakes a poll is
 // the clock, not an event on an Agent, and controller-runtime's shape for that
@@ -40,7 +41,8 @@ func (p *Poller) Start(ctx context.Context) error {
 }
 
 // poll reads the definitions once, claims each one garam does not already hold
-// a claim for, and constructs each one this operator holds.
+// a claim for, and constructs each one this operator holds, correcting the image
+// of one it built before.
 func (p *Poller) poll(ctx context.Context) {
 	log := logf.FromContext(ctx).WithName("garam")
 
@@ -60,7 +62,28 @@ func (p *Poller) poll(ctx context.Context) {
 			}
 			claim = &Claim{Epoch: assignment.Epoch}
 		}
+		p.correct(ctx, definition.Agent)
 		p.construct(ctx, definition.Agent, claim.Epoch)
+	}
+}
+
+// correct brings the image of an agent this operator already built to the one it
+// is configured with, so that a corrected configuration reaches the agents
+// constructed while it was wrong.
+//
+// It runs before the credential is looked at rather than beside the certificate,
+// because construction is what places a credential and the agents this repairs
+// have one already: gated on a missing credential it would repair nothing.
+func (p *Poller) correct(ctx context.Context, agent GRN) {
+	log := logf.FromContext(ctx).WithName("garam")
+
+	corrected, err := p.constructor.CorrectImage(ctx, agent)
+	if err != nil {
+		log.Error(err, "Failed to correct the image of an agent this operator constructed", "agent", agent)
+		return
+	}
+	if corrected {
+		log.Info("Corrected the image of an agent this operator constructed", "agent", agent)
 	}
 }
 
