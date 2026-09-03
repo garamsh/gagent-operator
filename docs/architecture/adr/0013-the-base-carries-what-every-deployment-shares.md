@@ -1,6 +1,6 @@
 # ADR 0013: The base carries what every deployment shares, and an environment's values live where that environment is reconciled
 
-> Status: accepted
+> Status: superseded by ADR-0017
 > Date: 2026-08-31
 
 Append-only: once merged, the body below is not rewritten. A fact later found wrong is corrected in an appended note, not edited out; a revised decision is a new ADR that supersedes this one.

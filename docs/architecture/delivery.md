@@ -37,7 +37,7 @@ What this project publishes, where its output lands in a cluster, and who owns e
 
 That the reference is the digest with the tag beside it, and that the repository is immutable with a tag naming one commit, is [ADR 0014](adr/0014-the-image-repository-is-immutable-and-a-deployment-references-a-digest.md). It borrows the argument `gagent` makes for its own four repositories (`gagent@04ed05a:docs/architecture/adr/0020-immutable-image-repositories.md`), which names this project's repository only to exclude it, and states the ground on which the borrowed argument holds here — a different ground, because `gagent` checks at build time that a tag names the tree it was built from and this project does not.
 
-Which repository owns the value a deployment carries that reference in is [ADR 0013](adr/0013-the-base-carries-what-every-deployment-shares.md): the base keeps `controller:latest` as a replaceable name and the deploying overlay replaces it. That decides whose the value is; this document decides what it must look like.
+Which repository owns the value a deployment carries that reference in is [ADR 0017](adr/0017-an-unreconciled-environments-values-live-in-an-overlay-here.md), which supersedes [ADR 0013](adr/0013-the-base-carries-what-every-deployment-shares.md): the base keeps `controller:latest` as a replaceable name, the deploying overlay replaces it, and an environment nothing reconciles keeps that overlay here. That decides whose the value is; this document decides what it must look like.
 
 That a constructed agent is built in the manager's own namespace is [ADR 0009](adr/0009-construct-a-claimed-agent-from-the-operators-own-configuration.md), which is why that namespace is in the delivery set rather than beside it.
 
