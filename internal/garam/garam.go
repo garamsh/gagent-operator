@@ -235,7 +235,7 @@ type EnrolledCertificate struct {
 
 // ErrTokenNotUsable is what garam answers an enrollment it will not admit.
 // Spent, expired and never-minted are one answer and nothing here infers which
-// (garam@b16a896:api/machine.yaml:163-168): a token is spent by the first call
+// (garam@b16a896:api/machine.yaml:160-166): a token is spent by the first call
 // that presents it whether or not that call succeeds, and it stops being
 // spendable ten minutes after it was minted.
 //

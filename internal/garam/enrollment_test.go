@@ -34,7 +34,7 @@ const enrolledOperator = "grn:garam:default:operator:gagent"
 // answerEnrollment answers an enrollment the way garam does: it reads the public
 // key and the signature out of the request and nothing else, signs a certificate
 // naming the operator the token named, and answers no private key because it
-// generated none (garam@b16a896:api/machine.yaml:811-848).
+// generated none (garam@b16a896:api/machine.yaml:811-849).
 func answerEnrollment(t *testing.T) http.HandlerFunc {
 	t.Helper()
 

@@ -177,7 +177,7 @@ func (c *Client) RenewIdentity(ctx context.Context) (Credential, error) {
 
 // Enroll obtains this operator's first certificate: garam signs the request for
 // the operator the token names, and the token is spent
-// (garam@b16a896:api/machine.yaml:147-192). It is the one route on this
+// (garam@b16a896:api/machine.yaml:147-198). It is the one route on this
 // listener a caller reaches with no certificate, which is what a caller that
 // has none needs.
 //
@@ -376,7 +376,7 @@ type enrollment struct {
 
 // enrolledCertificatePayload is the certificate an enrollment answers. garam
 // answers no private key here, because it generated none
-// (garam@b16a896:api/machine.yaml:811-821).
+// (garam@b16a896:api/machine.yaml:813-820).
 type enrolledCertificatePayload struct {
 	GRN            string    `json:"grn"`
 	CertificatePEM string    `json:"certificatePem"`
