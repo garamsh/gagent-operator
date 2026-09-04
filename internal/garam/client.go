@@ -175,6 +175,38 @@ func (c *Client) RenewIdentity(ctx context.Context) (Credential, error) {
 	return answered.credential()
 }
 
+// Enroll obtains this operator's first certificate: garam signs the request for
+// the operator the token names, and the token is spent
+// (garam@b16a896:api/machine.yaml:147-198). It is the one route on this
+// listener a caller reaches with no certificate, which is what a caller that
+// has none needs.
+//
+// The request's own signature is checked before anything is sent. The token is
+// spent by the attempt whether or not the attempt succeeds, so a request garam
+// would refuse costs a registration rather than a retry.
+//
+// A token garam refuses answers [ErrTokenNotUsable], and nothing retries: one
+// token is one attempt. What comes back is not obtainable again — garam
+// generated no key and holds none — so store it before treating it as obtained.
+func (c *Client) Enroll(ctx context.Context, token string, request CertificateRequest) (EnrolledCertificate, error) {
+	if err := request.checkSignature(); err != nil {
+		return EnrolledCertificate{}, fmt.Errorf("enroll this operator: %w", err)
+	}
+
+	var answered enrolledCertificatePayload
+	presented := enrollment{Token: token, CertificateRequestPEM: string(request.RequestPEM)}
+	err := c.send(ctx, http.MethodPost, "/enrollment", presented, &answered)
+
+	var refused *refusal
+	if errors.As(err, &refused) && refused.status == http.StatusUnauthorized {
+		return EnrolledCertificate{}, fmt.Errorf("enroll this operator: %w", ErrTokenNotUsable)
+	}
+	if err != nil {
+		return EnrolledCertificate{}, fmt.Errorf("enroll this operator: %w", err)
+	}
+	return answered.enrolledCertificate()
+}
+
 // send performs one request against the machine listener, carrying body where
 // there is one, and decodes what it answered into out.
 //
@@ -329,6 +361,46 @@ func (p agentCredentialPayload) agentCredential() (AgentCredential, error) {
 		CertificatePEM: []byte(p.CertificatePEM),
 		KeyPEM:         []byte(p.PrivateKeyPEM),
 		IssuerPEM:      []byte(p.IssuerPEM),
+		ServerRootPEM:  []byte(p.ServerRootPEM),
+		NotAfter:       p.NotAfter,
+	}, nil
+}
+
+// enrollment is what this operator presents to enroll: the token it was given
+// and the request over the key it generated. The token lives in this value for
+// the length of the call and in nothing that outlives it.
+type enrollment struct {
+	Token                 string `json:"token"`
+	CertificateRequestPEM string `json:"certificateRequestPem"`
+}
+
+// enrolledCertificatePayload is the certificate an enrollment answers. garam
+// answers no private key here, because it generated none
+// (garam@b16a896:api/machine.yaml:813-820).
+type enrolledCertificatePayload struct {
+	GRN            string    `json:"grn"`
+	CertificatePEM string    `json:"certificatePem"`
+	ServerRootPEM  string    `json:"serverRootPem"`
+	NotAfter       time.Time `json:"notAfter"`
+}
+
+// enrolledCertificate reads what an enrollment answered, refusing only an
+// answer with no certificate in it.
+//
+// It is stricter nowhere else on purpose, where [agentCredentialPayload] checks
+// every field: an agent's certificate can be asked for again and an enrollment
+// cannot, so discarding one over a field this operator does not act on would
+// cost the certificate and the token together. The garam server root is carried
+// to be compared and not to be stored, and the issuer that signed the
+// certificate is not carried at all: that authority signs no listener, and what
+// verifies garam is the deployment's to supply.
+func (p enrolledCertificatePayload) enrolledCertificate() (EnrolledCertificate, error) {
+	if p.CertificatePEM == "" {
+		return EnrolledCertificate{}, errors.New("an enrollment garam answered carries no certificate")
+	}
+	return EnrolledCertificate{
+		Operator:       GRN(p.GRN),
+		CertificatePEM: []byte(p.CertificatePEM),
 		ServerRootPEM:  []byte(p.ServerRootPEM),
 		NotAfter:       p.NotAfter,
 	}, nil

@@ -22,9 +22,12 @@ import (
 )
 
 // stubListener stands in for garam's machine listener: it terminates TLS with a
-// certificate of its own and requires a client certificate as garam's does
-// (garam@8f9dd9d:internal/machine/listener.go:24-29), and records what each
-// request asked for and authenticated as.
+// certificate of its own and asks for a client certificate without requiring
+// one, as garam's does (garam@b16a896:internal/machine/listener.go:29), and
+// records what each request asked for and authenticated as.
+//
+// Requesting rather than requiring is what leaves room for the one route a
+// caller reaches before it has a certificate at all.
 type stubListener struct {
 	server *httptest.Server
 
@@ -68,7 +71,7 @@ func newStubListener(t *testing.T, handler http.HandlerFunc) *stubListener {
 	stub.server.TLS = &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{certificate},
-		ClientAuth:   tls.RequireAnyClientCert,
+		ClientAuth:   tls.RequestClientCert,
 	}
 	stub.server.StartTLS()
 	t.Cleanup(stub.server.Close)
