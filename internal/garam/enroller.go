@@ -2,9 +2,13 @@ package garam
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,6 +72,11 @@ type Enroller struct {
 	// reads.
 	certificateFile string
 	keyFile         string
+
+	// trustFile is what verified the call this operator enrolls over, and is
+	// what the garam server root in the answer is compared against. Nothing
+	// here writes it.
+	trustFile string
 }
 
 // NewEnroller returns an Enroller spending the token in tokenFile and writing
@@ -76,13 +85,14 @@ type Enroller struct {
 // client reaches garam presenting no certificate, which is what [EnrollmentTLS]
 // answers with: an operator that has one does not enroll, and one that has none
 // cannot present it.
-func NewEnroller(client *Client, store CredentialStore, tokenFile, certificateFile, keyFile string) *Enroller {
+func NewEnroller(client *Client, store CredentialStore, tokenFile, certificateFile, keyFile, trustFile string) *Enroller {
 	return &Enroller{
 		client:          client,
 		store:           store,
 		tokenFile:       tokenFile,
 		certificateFile: certificateFile,
 		keyFile:         keyFile,
+		trustFile:       trustFile,
 	}
 }
 
@@ -159,6 +169,8 @@ func (e *Enroller) enroll(ctx context.Context, token string) {
 		return
 	}
 
+	e.reportServerRoot(ctx, enrolled.ServerRootPEM)
+
 	credential := Credential{CertificatePEM: enrolled.CertificatePEM, KeyPEM: request.KeyPEM}
 	if err := e.store.ReplaceCredential(ctx, credential); err != nil {
 		log.Error(err, "Lost the certificate this operator enrolled with. garam signed a key it never "+
@@ -168,4 +180,63 @@ func (e *Enroller) enroll(ctx context.Context, token string) {
 	log.Info("Enrolled this operator. The kubelet carries the credential into the volume this "+
 		"operator reads it from, and the calls before it lands fail at the handshake",
 		"operator", enrolled.Operator, "notAfter", enrolled.NotAfter)
+}
+
+// reportServerRoot says once where the garam server root the answer carries is
+// not one this operator verifies garam by. It stores nothing, changes nothing
+// and fails nothing: what verifies garam is the deployment's to supply, and a
+// root read out of the answer it authenticated verifies nothing.
+//
+// It is said at all because nothing else would say it. Nothing rewrites the
+// trust file, so a root garam has moved on from is a file that goes on working
+// until every handshake fails at once, and this answer is where the two are
+// side by side.
+func (e *Enroller) reportServerRoot(ctx context.Context, answered []byte) {
+	log := logf.FromContext(ctx).WithName("garam")
+
+	answers := certificateFingerprints(answered)
+	if len(answers) == 0 {
+		// A field this operator does not act on, so its absence is read at the
+		// level the rest of the answer's detail is and not louder.
+		log.V(1).Info("Compared no garam server root: the enrollment answered none")
+		return
+	}
+	trusted := certificateFingerprints(readFileOrNothing(e.trustFile))
+	for _, answer := range answers {
+		if slices.Contains(trusted, answer) {
+			continue
+		}
+		log.Info("The garam server root this enrollment answered is not one this operator verifies garam by. "+
+			"Nothing here rewrites what verifies garam, so carrying a rotation into that file is the deployment's",
+			"answered", answers, "trusted", trusted, "file", e.trustFile)
+		return
+	}
+}
+
+// certificateFingerprints is the SHA-256 of every certificate a PEM holds, over
+// the DER as `openssl x509 -fingerprint -sha256` takes it, so that a line naming
+// one names what a reader can compute from the file.
+func certificateFingerprints(encoded []byte) []string {
+	var fingerprints []string
+	for rest := encoded; ; {
+		var block *pem.Block
+		if block, rest = pem.Decode(rest); block == nil {
+			return fingerprints
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		sum := sha256.Sum256(block.Bytes)
+		fingerprints = append(fingerprints, hex.EncodeToString(sum[:]))
+	}
+}
+
+// readFileOrNothing answers a file's contents, and nothing where it cannot be
+// read. What reads it has already been given what it needs and is reporting.
+func readFileOrNothing(name string) []byte {
+	content, err := os.ReadFile(name)
+	if err != nil {
+		return nil
+	}
+	return content
 }

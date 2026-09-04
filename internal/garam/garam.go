@@ -228,6 +228,12 @@ type EnrolledCertificate struct {
 	// CertificatePEM is the certificate, PEM-encoded.
 	CertificatePEM []byte
 
+	// ServerRootPEM is the garam server root as the answer carries it,
+	// PEM-encoded. It is compared against the root that verified the call and
+	// stored nowhere: what verifies garam is the deployment's to supply, and a
+	// root read out of the answer it authenticated verifies nothing.
+	ServerRootPEM []byte
+
 	// NotAfter is when the certificate stops being valid. garam answers it, so
 	// nothing here parses a PEM to learn it.
 	NotAfter time.Time

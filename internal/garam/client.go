@@ -380,6 +380,7 @@ type enrollment struct {
 type enrolledCertificatePayload struct {
 	GRN            string    `json:"grn"`
 	CertificatePEM string    `json:"certificatePem"`
+	ServerRootPEM  string    `json:"serverRootPem"`
 	NotAfter       time.Time `json:"notAfter"`
 }
 
@@ -388,11 +389,11 @@ type enrolledCertificatePayload struct {
 //
 // It is stricter nowhere else on purpose, where [agentCredentialPayload] checks
 // every field: an agent's certificate can be asked for again and an enrollment
-// cannot, so discarding one over a field this operator does not read would cost
-// the certificate and the token together. The issuer and the garam server root
-// the answer also carries are two such fields — what verifies garam is the
-// deployment's to supply, and the authority that signed this certificate signs
-// no listener.
+// cannot, so discarding one over a field this operator does not act on would
+// cost the certificate and the token together. The garam server root is carried
+// to be compared and not to be stored, and the issuer that signed the
+// certificate is not carried at all: that authority signs no listener, and what
+// verifies garam is the deployment's to supply.
 func (p enrolledCertificatePayload) enrolledCertificate() (EnrolledCertificate, error) {
 	if p.CertificatePEM == "" {
 		return EnrolledCertificate{}, errors.New("an enrollment garam answered carries no certificate")
@@ -400,6 +401,7 @@ func (p enrolledCertificatePayload) enrolledCertificate() (EnrolledCertificate, 
 	return EnrolledCertificate{
 		Operator:       GRN(p.GRN),
 		CertificatePEM: []byte(p.CertificatePEM),
+		ServerRootPEM:  []byte(p.ServerRootPEM),
 		NotAfter:       p.NotAfter,
 	}, nil
 }

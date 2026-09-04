@@ -316,7 +316,7 @@ func main() {
 					os.Exit(1)
 				}
 				enroller := garam.NewEnroller(garam.NewClient(garamAddress, enrollmentTLS), store,
-					garamEnrollmentTokenFile, garamCertificateFile, garamKeyFile)
+					garamEnrollmentTokenFile, garamCertificateFile, garamKeyFile, garamTrustFile)
 				if err := mgr.Add(enroller); err != nil {
 					setupLog.Error(err, "Failed to add the garam enroller", "file", garamEnrollmentTokenFile)
 					os.Exit(1)

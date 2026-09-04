@@ -5,19 +5,27 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
+	"os"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/testr"
 	. "github.com/onsi/gomega"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/garamsh/gagent-operator/internal/garam"
 )
@@ -33,9 +41,10 @@ const enrolledOperator = "grn:garam:default:operator:gagent"
 
 // answerEnrollment answers an enrollment the way garam does: it reads the public
 // key and the signature out of the request and nothing else, signs a certificate
-// naming the operator the token named, and answers no private key because it
-// generated none (garam@b16a896:api/machine.yaml:811-849).
-func answerEnrollment(t *testing.T) http.HandlerFunc {
+// naming the operator the token named, answers the garam server root it is given
+// to answer, and answers no private key because it generated none
+// (garam@b16a896:api/machine.yaml:811-849).
+func answerEnrollment(t *testing.T, serverRootPEM []byte) http.HandlerFunc {
 	t.Helper()
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +60,7 @@ func answerEnrollment(t *testing.T) http.HandlerFunc {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = fmt.Fprintf(w, `{"grn":%q,"certificatePem":%q,"issuerPem":%q,"serverRootPem":%q,"notAfter":%q}`,
 			enrolledOperator, signRequest(t, []byte(presented.CertificateRequestPEM)),
-			"an-issuer", "a-server-root", time.Now().Add(time.Hour).Format(time.RFC3339))
+			"an-issuer", serverRootPEM, time.Now().Add(time.Hour).Format(time.RFC3339))
 	}
 }
 
@@ -110,6 +119,31 @@ func signRequest(t *testing.T, requestPEM []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
+// newEnrollmentStub starts a listener answering enrollments with the certificate
+// it presents, which is the ordinary case: the root garam answers is the one the
+// caller already verified it by. The handler reads it back through the listener
+// because the trust file is written as the listener starts.
+func newEnrollmentStub(t *testing.T) *stubListener {
+	t.Helper()
+
+	var stub *stubListener
+	stub = newStubListener(t, func(w http.ResponseWriter, r *http.Request) {
+		answerEnrollment(t, readFile(t, stub.trustFile))(w, r)
+	})
+	return stub
+}
+
+// readFile answers what a file holds, failing the test where it cannot be read.
+func readFile(t *testing.T, name string) []byte {
+	t.Helper()
+
+	content, err := os.ReadFile(name)
+	if err != nil {
+		t.Errorf("read %s: %v", name, err)
+	}
+	return content
+}
+
 // answerStatus answers every request with garam's error body under status.
 func answerStatus(status int) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
@@ -122,10 +156,26 @@ func answerStatus(status int) http.HandlerFunc {
 // newEnrollmentClient starts a listener serving handler at the enrollment route
 // and returns a client reaching it the way an enrolling operator does: verifying
 // the listener against the root the deployment supplied, presenting nothing.
-func newEnrollmentClient(t *testing.T, handler http.HandlerFunc) (*garam.Client, *stubListener) {
+func newEnrollmentClient(t *testing.T) (*garam.Client, *stubListener) {
 	t.Helper()
 
-	stub := newStubListener(t, handler)
+	return clientFor(t, newEnrollmentStub(t))
+}
+
+// newRefusingClient is the same client against a listener that refuses with
+// status.
+func newRefusingClient(t *testing.T, status int) (*garam.Client, *stubListener) {
+	t.Helper()
+
+	return clientFor(t, newStubListener(t, answerStatus(status)))
+}
+
+// clientFor answers a client reaching stub the way an enrolling operator does:
+// verifying the listener against the root the deployment supplied, presenting
+// nothing.
+func clientFor(t *testing.T, stub *stubListener) (*garam.Client, *stubListener) {
+	t.Helper()
+
 	tlsConfig, err := garam.EnrollmentTLS(stub.trustFile)
 	if err != nil {
 		t.Fatalf("configure the connection to the stub listener: %v", err)
@@ -197,7 +247,7 @@ func TestNewCertificateRequestNamesNoSubject(t *testing.T) {
 
 func TestEnrollReturnsTheCertificateGaramSigned(t *testing.T) {
 	g := NewWithT(t)
-	client, stub := newEnrollmentClient(t, answerEnrollment(t))
+	client, stub := newEnrollmentClient(t)
 	request, err := garam.NewCertificateRequest()
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -226,7 +276,7 @@ func TestEnrollReturnsTheCertificateGaramSigned(t *testing.T) {
 // parse as PKCS#10, so nothing but the signature check can be refusing it.
 func TestEnrollSendsNoRequestWhoseSignatureDoesNotVerify(t *testing.T) {
 	g := NewWithT(t)
-	client, stub := newEnrollmentClient(t, answerEnrollment(t))
+	client, stub := newEnrollmentClient(t)
 	request, err := garam.NewCertificateRequest()
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -253,7 +303,7 @@ func TestEnrollSendsNoRequestWhoseSignatureDoesNotVerify(t *testing.T) {
 // told them apart would be inferring which.
 func TestEnrollReportsARefusedTokenAsOneAnswer(t *testing.T) {
 	g := NewWithT(t)
-	client, _ := newEnrollmentClient(t, answerStatus(http.StatusUnauthorized))
+	client, _ := newRefusingClient(t, http.StatusUnauthorized)
 	request, err := garam.NewCertificateRequest()
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -262,7 +312,7 @@ func TestEnrollReportsARefusedTokenAsOneAnswer(t *testing.T) {
 
 	// The control: the other status this route answers is a request garam
 	// refused, which is not a token to register again for.
-	malformed, _ := newEnrollmentClient(t, answerStatus(http.StatusBadRequest))
+	malformed, _ := newRefusingClient(t, http.StatusBadRequest)
 	_, err = malformed.Enroll(context.Background(), "a-token", request)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err).NotTo(MatchError(garam.ErrTokenNotUsable))
@@ -270,11 +320,11 @@ func TestEnrollReportsARefusedTokenAsOneAnswer(t *testing.T) {
 
 func TestEnrollRefusesAnAnswerCarryingNoCertificate(t *testing.T) {
 	g := NewWithT(t)
-	client, _ := newEnrollmentClient(t, func(w http.ResponseWriter, _ *http.Request) {
+	client, _ := clientFor(t, newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"grn":"grn:garam:default:operator:gagent"}`))
-	})
+		_, _ = w.Write([]byte(`{"grn":"` + enrolledOperator + `"}`))
+	}))
 	request, err := garam.NewCertificateRequest()
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -292,7 +342,7 @@ func TestEnrollRefusesAnAnswerCarryingNoCertificate(t *testing.T) {
 // is answered.
 func TestEnrollmentTLSVerifiesGaramAgainstTheRootItWasGiven(t *testing.T) {
 	g := NewWithT(t)
-	stub := newStubListener(t, answerEnrollment(t))
+	stub := newEnrollmentStub(t)
 	request, err := garam.NewCertificateRequest()
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -315,10 +365,10 @@ func TestEnrollmentTLSVerifiesGaramAgainstTheRootItWasGiven(t *testing.T) {
 
 // startEnroller runs an Enroller until it returns or the test ends, and answers
 // a channel closed when Start returned.
-func startEnroller(t *testing.T, enroller *garam.Enroller) chan struct{} {
+func startEnroller(t *testing.T, ctx context.Context, enroller *garam.Enroller) chan struct{} {
 	t.Helper()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -345,7 +395,7 @@ func newEnroller(t *testing.T, stub *stubListener, store garam.CredentialStore, 
 		tokenFile = writeFile(t, dir, "enrollment-token", []byte(token))
 	}
 	return garam.NewEnroller(garam.NewClient(stub.address(), tlsConfig), store, tokenFile,
-		dir+"/certificate.pem", dir+"/key.pem")
+		dir+"/certificate.pem", dir+"/key.pem", stub.trustFile)
 }
 
 // TestEnrollerStoresTheCertificateBesideTheKeyItGenerated is the whole of what
@@ -354,10 +404,10 @@ func newEnroller(t *testing.T, stub *stubListener, store garam.CredentialStore, 
 // second copy of one.
 func TestEnrollerStoresTheCertificateBesideTheKeyItGenerated(t *testing.T) {
 	g := NewWithT(t)
-	stub := newStubListener(t, answerEnrollment(t))
+	stub := newEnrollmentStub(t)
 	store := newRecordingStore(nil)
 
-	stopped := startEnroller(t, newEnroller(t, stub, store, "a-token", t.TempDir()))
+	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", t.TempDir()))
 
 	g.Eventually(stopped, time.Second*10).Should(BeClosed())
 	g.Expect(store.written).To(HaveLen(1))
@@ -374,12 +424,12 @@ func TestEnrollerStoresTheCertificateBesideTheKeyItGenerated(t *testing.T) {
 // none asks for.
 func TestEnrollerSpendsNothingWhereThisOperatorHoldsACertificate(t *testing.T) {
 	g := NewWithT(t)
-	stub := newStubListener(t, answerEnrollment(t))
+	stub := newEnrollmentStub(t)
 	store := newRecordingStore(nil)
 	dir := t.TempDir()
 	writeIdentity(t, dir, "operator")
 
-	stopped := startEnroller(t, newEnroller(t, stub, store, "a-token", dir))
+	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", dir))
 
 	g.Eventually(stopped, time.Second*10).Should(BeClosed())
 	g.Expect(stub.requests()).To(BeEmpty())
@@ -399,10 +449,10 @@ func TestEnrollerWaitsWhereThereIsNoTokenToSpend(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			g := NewWithT(t)
-			stub := newStubListener(t, answerEnrollment(t))
+			stub := newEnrollmentStub(t)
 			store := newRecordingStore(nil)
 
-			stopped := startEnroller(t, newEnroller(t, stub, store, test.token, t.TempDir()))
+			stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, test.token, t.TempDir()))
 
 			g.Consistently(stopped, time.Millisecond*200).ShouldNot(BeClosed())
 			g.Expect(stub.requests()).To(BeEmpty())
@@ -419,7 +469,7 @@ func TestEnrollerPresentsARefusedTokenOnce(t *testing.T) {
 	stub := newStubListener(t, answerStatus(http.StatusUnauthorized))
 	store := newRecordingStore(nil)
 
-	stopped := startEnroller(t, newEnroller(t, stub, store, "a-token", t.TempDir()))
+	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", t.TempDir()))
 
 	g.Eventually(stopped, time.Second*10).Should(BeClosed())
 	g.Expect(stub.requests()).To(HaveLen(1))
@@ -433,12 +483,85 @@ func TestEnrollerPresentsARefusedTokenOnce(t *testing.T) {
 // call here would present a token that is already gone.
 func TestEnrollerAsksForNothingElseWhereTheStoreRefusesTheAnswer(t *testing.T) {
 	g := NewWithT(t)
-	stub := newStubListener(t, answerEnrollment(t))
+	stub := newEnrollmentStub(t)
 	store := newRecordingStore(errors.New("the API server refused the patch"))
 
-	stopped := startEnroller(t, newEnroller(t, stub, store, "a-token", t.TempDir()))
+	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", t.TempDir()))
 
 	g.Eventually(stopped, time.Second*10).Should(BeClosed())
 	g.Expect(stub.requests()).To(HaveLen(1))
 	g.Expect(store.written).To(HaveLen(1))
+}
+
+// recordedLog collects what an Enroller logged, so that a line it emits and
+// nothing else can be read back. It is a [testr.TestingT], which is what the
+// package's other tests build their logger from.
+type recordedLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *recordedLog) Helper() {}
+
+func (r *recordedLog) Log(args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines = append(r.lines, fmt.Sprint(args...))
+}
+
+// logged answers every line holding substring.
+func (r *recordedLog) logged(substring string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.DeleteFunc(slices.Clone(r.lines), func(line string) bool { return !strings.Contains(line, substring) })
+}
+
+// fingerprintOf is the SHA-256 of the certificate in a PEM, over the DER, which
+// is what a reader gets from `openssl x509 -fingerprint -sha256`.
+func fingerprintOf(t *testing.T, certificatePEM []byte) string {
+	t.Helper()
+
+	block, _ := pem.Decode(certificatePEM)
+	if block == nil {
+		t.Fatalf("the certificate holds no PEM block")
+	}
+	sum := sha256.Sum256(block.Bytes)
+	return hex.EncodeToString(sum[:])
+}
+
+// TestEnrollerNamesAServerRootTheAnswerAndTheTrustFileDoNotShare is the only
+// notice a deployment gets that garam's root is moving ahead of the file that
+// verifies garam, which nothing here rewrites. Without it the first symptom is
+// every handshake failing at once.
+//
+// The control is the same enrollment answering the root the call was verified
+// by, which says nothing. Both store the credential: this reports and refuses
+// nothing, so an operator whose garam has rotated still enrolls.
+func TestEnrollerNamesAServerRootTheAnswerAndTheTrustFileDoNotShare(t *testing.T) {
+	g := NewWithT(t)
+	elsewhere, _ := newCertificate(t, "another-garam")
+	stub := newStubListener(t, answerEnrollment(t, elsewhere))
+	store := newRecordingStore(nil)
+
+	recorded := &recordedLog{}
+	ctx := logf.IntoContext(context.Background(), testr.NewWithInterface(recorded, testr.Options{Verbosity: 1}))
+	stopped := startEnroller(t, ctx, newEnroller(t, stub, store, "a-token", t.TempDir()))
+
+	g.Eventually(stopped, time.Second*10).Should(BeClosed())
+	named := recorded.logged("not one this operator verifies garam by")
+	g.Expect(named).To(HaveLen(1))
+	g.Expect(named[0]).To(ContainSubstring(fingerprintOf(t, elsewhere)))
+	g.Expect(named[0]).To(ContainSubstring(fingerprintOf(t, readFile(t, stub.trustFile))))
+	g.Expect(store.written).To(HaveLen(1))
+
+	// The control: the same answer carrying the root that verified the call.
+	shared := newEnrollmentStub(t)
+	sharedStore := newRecordingStore(nil)
+	sharedLog := &recordedLog{}
+	sharedCtx := logf.IntoContext(context.Background(), testr.NewWithInterface(sharedLog, testr.Options{Verbosity: 1}))
+	sharedStopped := startEnroller(t, sharedCtx, newEnroller(t, shared, sharedStore, "a-token", t.TempDir()))
+
+	g.Eventually(sharedStopped, time.Second*10).Should(BeClosed())
+	g.Expect(sharedLog.logged("not one this operator verifies garam by")).To(BeEmpty())
+	g.Expect(sharedStore.written).To(HaveLen(1))
 }
