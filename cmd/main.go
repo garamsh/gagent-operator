@@ -59,7 +59,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var garamAddress, garamCertificateFile, garamKeyFile, garamTrustFile string
-	var garamCredentialSecret string
+	var garamCredentialSecret, garamEnrollmentTokenFile string
 	var agentImage, agentStorageSize, agentCopyImage, agentToolsImage string
 	var garamPollInterval, garamRenewalInterval, garamReportInterval time.Duration
 	var tlsOpts []func(*tls.Config)
@@ -99,6 +99,11 @@ func main() {
 			"which a renewal is written back to. Unset leaves this operator renewing nothing.")
 	flag.DurationVar(&garamRenewalInterval, "garam-renewal-interval", time.Hour,
 		"How often this operator asks garam to replace the certificate it authenticates with.")
+	flag.StringVar(&garamEnrollmentTokenFile, "garam-enrollment-token-file", "",
+		"The file holding the one-time token this operator obtains its first certificate with, which is "+
+			"a key of the Secret named above. A token is spent by one attempt and expires ten minutes "+
+			"after it is minted, and no file, an empty one, or a certificate this operator already holds "+
+			"leaves it enrolling nothing.")
 	flag.StringVar(&agentImage, "agent-image", "",
 		"The container image every agent this operator constructs runs. It has no default: name the image "+
 			"and the tag or digest explicitly. Every container of an agent's Pod is pulled at every start, so "+
@@ -244,7 +249,16 @@ func main() {
 	// +kubebuilder:scaffold:builder
 
 	if garamAddress != "" {
-		tlsConfig, err := garam.MutualTLS(garamCertificateFile, garamKeyFile, garamTrustFile)
+		// A deployment that has been given a token to spend and a Secret to
+		// write what it buys. An operator that is enrolling has no certificate
+		// for the startup read to find: its own enrollment writes one where the
+		// handshake reads it, and until then the handshake is what says so.
+		enrolling := garamEnrollmentTokenFile != "" && garamCredentialSecret != ""
+		mutualTLS := garam.MutualTLS
+		if enrolling {
+			mutualTLS = garam.EnrollingMutualTLS
+		}
+		tlsConfig, err := mutualTLS(garamCertificateFile, garamKeyFile, garamTrustFile)
 		if err != nil {
 			setupLog.Error(err, "Failed to configure the connection to garam")
 			os.Exit(1)
@@ -292,8 +306,24 @@ func main() {
 				setupLog.Error(err, "Failed to add the garam renewer", "secret", garamCredentialSecret)
 				os.Exit(1)
 			}
+			if enrolling {
+				// A second client, because this one presents no certificate:
+				// enrollment is the route an operator that has none reaches,
+				// and it verifies garam by the root the deployment supplied.
+				enrollmentTLS, err := garam.EnrollmentTLS(garamTrustFile)
+				if err != nil {
+					setupLog.Error(err, "Failed to configure the connection this operator enrolls over")
+					os.Exit(1)
+				}
+				enroller := garam.NewEnroller(garam.NewClient(garamAddress, enrollmentTLS), store,
+					garamEnrollmentTokenFile, garamCertificateFile, garamKeyFile)
+				if err := mgr.Add(enroller); err != nil {
+					setupLog.Error(err, "Failed to add the garam enroller", "file", garamEnrollmentTokenFile)
+					os.Exit(1)
+				}
+			}
 		} else {
-			setupLog.Info("Renewing nothing: garam-credential-secret is unset")
+			setupLog.Info("Renewing nothing and enrolling nothing: garam-credential-secret is unset")
 		}
 	} else {
 		setupLog.Info("Reading no definitions and reporting nothing: garam-address is unset")
