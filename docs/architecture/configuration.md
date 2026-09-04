@@ -14,6 +14,7 @@ How this operator's deployment is configured, and which repository owns each val
 | `--garam-credential-secret` | The base's manager Pod already mounts that Secret by name. The two names have to agree, and an owner that held one of them would leave the pair spanning two repositories. |
 | `--garam-certificate-file`, `--garam-key-file` | Paths inside the container, under the `mountPath` the same file writes. Each file's base name is also the Secret key the renewal is written to, so the pair fixes this operator's contract with whoever mints the Secret. |
 | `--garam-trust-file` | The same, and it names the role rather than the certificate: what `garam`'s listener is verified against has already moved once, and only the file's contents moved with it. |
+| `--garam-enrollment-token-file` | A path under the same `mountPath`, whose base name is the Secret key a person places the token in. What differs between deployments is the token rather than where this operator reads one, and a deployment with no token there enrolls nothing. |
 
 - **The deploying overlay owns a flag that names something one cluster holds.** The base sets none of these, and a base that set one would ship one environment's values to every other.
 
@@ -32,7 +33,7 @@ How this operator's deployment is configured, and which repository owns each val
   - The manager's Deployment carries one container, at index 0 of the Pod spec. `config/default/manager_metrics_patch.yaml` already addresses it that way.
   - The base sets none of them, so an appended argument is the only occurrence of a flag and no ordering decides which wins.
   - The manager's image is `controller:latest`, a name a consumer replaces rather than a registry this project claims. `make deploy` replaces it the same way, through a generated overlay under `dist/`.
-- **No secret value is configured anywhere.** `--garam-credential-secret` names a Secret, the three credential flags name paths the kubelet writes into, and the material itself is minted out of band and reaches the process as files. Nothing an overlay sets carries key material, and an overlay is not where one would be put.
+- **No secret value is configured anywhere.** `--garam-credential-secret` names a Secret, the four credential flags name paths the kubelet writes into, and what those files hold — the enrollment token as much as the key material — is placed out of band and reaches the process as files. Nothing an overlay sets carries either, and an overlay is not where one would be put.
 
 ## Rationale
 
@@ -40,7 +41,9 @@ Which of the two owners a flag has is [ADR 0013](adr/0013-the-base-carries-what-
 
 Where the overlay itself lives is [ADR 0017](adr/0017-an-unreconciled-environments-values-live-in-an-overlay-here.md), which supersedes ADR 0013 and carries that test forward unchanged. ADR 0013 sent an environment's overlay to the repository reconciling that environment and refused one here; issue #119 found that the repository it named does not reconcile this operator, which leaves an environment nothing reconciles with no home for its values at all. ADR 0017 gives that environment one here and takes it away again when a reconciler appears. It also settles the reference form for an image this project does not build, which [ADR 0014](adr/0014-the-image-repository-is-immutable-and-a-deployment-references-a-digest.md) and `delivery.md` decide only for the image it does.
 
-That the credential has one home — a Secret mounted into the manager's Pod, read as files and replaced through the API server — is [ADR 0008](adr/0008-renew-the-operator-credential-into-the-secret-it-is-read-from.md). It is why four of the five flags the base now sets are the base's: they are the reading end of a mount `config/manager/manager.yaml` already writes.
+That the credential has one home — a Secret mounted into the manager's Pod, read as files and replaced through the API server — is [ADR 0008](adr/0008-renew-the-operator-credential-into-the-secret-it-is-read-from.md). It is why four of the six flags the base now sets are the base's: they are the reading end of a mount `config/manager/manager.yaml` already writes.
+
+That this operator obtains its first certificate itself, by presenting a token placed in that same Secret, is [ADR 0020](adr/0020-enroll-this-operator-with-a-one-time-token-and-keep-the-key-it-generated.md). It is why the token arrives as a file under the mount those four flags already describe: enrollment writes the credential where a renewal writes it, so the token is read where the credential lives.
 
 That the image and the storage size come from the operator's own configuration rather than from a definition is [ADR 0009](adr/0009-construct-a-claimed-agent-from-the-operators-own-configuration.md). It settles that they are configuration at all; this document settles which repository types them.
 
