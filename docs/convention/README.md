@@ -6,7 +6,6 @@ Rules every agent follows when writing code, tests, commits, and documents. The 
 - Scope
 - Stack-neutral
 - Stack-specific
-- Architecture
 - Independence
 - Precedence
 
@@ -32,7 +31,7 @@ What makes anything generated is that regenerating it changes nothing. What nobo
 | `review.md` | What a review must carry to be valid, and how an author responds |
 | `documentation.md` | What makes a document or a GitHub artifact valid, review comments included |
 
-Every project keeps all of these. They are the floor, and bootstrap prunes only the tables below.
+Every project keeps all of these. They are the floor, and bootstrap prunes only the table below.
 
 Selection is not once. A change that alters the project's stack carries the selection with it — the file that now matches added, the one that no longer does dropped, in the same pull request. A worker whose change triggers a selection does not make it.
 
@@ -53,10 +52,6 @@ A stack file states the concrete form of what a stack-neutral file governs: the 
 A stack built on another stack takes a row with a base in the Extends column. The derived file holds only the rules its stack changes — one rule, not the section around it — and the base governs every rule it does not, so a project keeping the derived file keeps the base too. A base has no base of its own: one level, so that opening two files is always enough.
 
 Silence in the derived file is not evidence that a base rule survives. A derived stack can defeat a base rule without contradicting it — the base says define the metrics registry once, the derived framework serves only a registry it made itself, and registering in the one the base named succeeds and appears nowhere. So the base is read in full when the row is added, and each later change to a base rule is read against every file extending it.
-
-## Architecture
-
-The shape the system is partitioned into. This project has none: its shape is fixed by the kubebuilder scaffold — an entry point, an API package, and a controller package — rather than partitioned into boundaries a document would have to describe, so no `arch-*.md` applies and the table is empty.
 
 ## Independence
 
