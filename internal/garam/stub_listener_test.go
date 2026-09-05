@@ -2,6 +2,7 @@ package garam_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -19,15 +20,23 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	. "github.com/onsi/gomega"
+
+	"github.com/garamsh/gagent-operator/internal/garam"
 )
 
 // stubListener stands in for garam's machine listener: it terminates TLS with a
 // certificate of its own and asks for a client certificate without requiring
-// one, as garam's does (garam@b16a896:internal/machine/listener.go:29), and
-// records what each request asked for and authenticated as.
+// one, as garam's does (garam@b16a896:internal/machine/listener.go:29), refuses
+// a call that presented none on every route but the enrollment, and records what
+// each request it served asked for and authenticated as.
 //
 // Requesting rather than requiring is what leaves room for the one route a
-// caller reaches before it has a certificate at all.
+// caller reaches before it has a certificate at all. It leaves the handshake
+// admitting a caller that presents nothing on every other route too, so what
+// those routes require is refused above the handshake instead. A call refused
+// there was not served, and reaches neither the handler nor the record.
 type stubListener struct {
 	server *httptest.Server
 
@@ -65,6 +74,10 @@ func newStubListener(t *testing.T, handler http.HandlerFunc) *stubListener {
 
 	stub := &stubListener{trustFile: writeFile(t, dir, "trust.pem", certificatePEM)}
 	stub.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authenticated(r) {
+			answerJSON(w, http.StatusUnauthorized, `{"kind":"unauthenticated","message":"no machine identity"}`)
+			return
+		}
 		stub.record(r)
 		handler(w, r)
 	}))
@@ -77,6 +90,18 @@ func newStubListener(t *testing.T, handler http.HandlerFunc) *stubListener {
 	t.Cleanup(stub.server.Close)
 
 	return stub
+}
+
+// authenticated reports whether a request carried what its route requires: a
+// certificate everywhere but the enrollment, which a caller reaches before it
+// has one.
+//
+// A call carrying none is refused above the handshake, because the handshake
+// admits it — which is what puts the enrollment on this listener at all. The
+// answer is the 401 garam answered an operator whose identity it would not
+// take, per ADR 0022.
+func authenticated(r *http.Request) bool {
+	return r.URL.Path == enrollmentPath || len(r.TLS.PeerCertificates) > 0
 }
 
 // address is the host and port the stub listener answers on.
@@ -109,6 +134,39 @@ func (s *stubListener) record(r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seen = append(s.seen, request)
+}
+
+// TestStubListenerRefusesACallCarryingNoCertificateOnEveryRouteButTheEnrollment
+// is what makes the rest of this package evidence that this operator presents
+// one. A listener that served a caller presenting nothing would answer an
+// operator that stopped presenting its identity exactly as it answers one that
+// presents it.
+func TestStubListenerRefusesACallCarryingNoCertificateOnEveryRouteButTheEnrollment(t *testing.T) {
+	g := NewWithT(t)
+	routes := http.NewServeMux()
+	routes.HandleFunc("/definitions", answerNoDefinitions)
+	routes.HandleFunc(enrollmentPath, func(w http.ResponseWriter, _ *http.Request) {
+		answerJSON(w, http.StatusCreated, `{"certificatePem":"a certificate"}`)
+	})
+	stub := newStubListener(t, routes.ServeHTTP)
+
+	presentingNothing, err := garam.EnrollmentTLS(stub.trustFile)
+	g.Expect(err).NotTo(HaveOccurred())
+	_, err = garam.NewClient(stub.address(), presentingNothing).ListDefinitions(context.Background())
+	g.Expect(err).To(MatchError(ContainSubstring("401 unauthenticated")))
+
+	// The controls, each one input away from the call above. The same route with
+	// a certificate presented is answered, so what refused that call is the
+	// certificate and not the route; and the same caller presenting nothing is
+	// answered on the enrollment, so it is the route requiring one and not the
+	// listener refusing whatever it is sent.
+	_, err = garam.NewClient(stub.address(), trustedBy(t, stub)).ListDefinitions(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	request, err := garam.NewCertificateRequest()
+	g.Expect(err).NotTo(HaveOccurred())
+	_, err = garam.NewClient(stub.address(), presentingNothing).Enroll(context.Background(), "a-token", request)
+	g.Expect(err).NotTo(HaveOccurred())
 }
 
 // newCertificate mints a self-signed certificate under commonName, the shape
