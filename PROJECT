@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: gagent-operator
 repo: github.com/garamsh/gagent-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: garam.sh
+  group: agent
+  kind: Agent
+  path: github.com/garamsh/gagent-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"
