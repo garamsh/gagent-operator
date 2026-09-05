@@ -116,6 +116,16 @@ func (s *stubListener) record(r *http.Request) {
 func newCertificate(t *testing.T, commonName string) (certificatePEM, keyPEM []byte) {
 	t.Helper()
 
+	return newCertificateValidUntil(t, commonName, time.Now().Add(time.Hour))
+}
+
+// newCertificateValidUntil is [newCertificate] with the notAfter chosen, which
+// is what separates a certificate this operator can authenticate with from one
+// it cannot. It is valid for the two hours ending there, so a notAfter already
+// past mints a certificate that expired rather than one no clock ever accepted.
+func newCertificateValidUntil(t *testing.T, commonName string, notAfter time.Time) (certificatePEM, keyPEM []byte) {
+	t.Helper()
+
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate a key for %s: %v", commonName, err)
@@ -123,8 +133,8 @@ func newCertificate(t *testing.T, commonName string) (certificatePEM, keyPEM []b
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
 		Subject:      pkix.Name{CommonName: commonName},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
+		NotBefore:    notAfter.Add(-2 * time.Hour),
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
@@ -148,7 +158,14 @@ func newCertificate(t *testing.T, commonName string) (certificatePEM, keyPEM []b
 func writeIdentity(t *testing.T, dir, commonName string) (certificateFile, keyFile string) {
 	t.Helper()
 
-	certificatePEM, keyPEM := newCertificate(t, commonName)
+	return writeIdentityValidUntil(t, dir, commonName, time.Now().Add(time.Hour))
+}
+
+// writeIdentityValidUntil is [writeIdentity] with the notAfter chosen.
+func writeIdentityValidUntil(t *testing.T, dir, commonName string, notAfter time.Time) (certificateFile, keyFile string) {
+	t.Helper()
+
+	certificatePEM, keyPEM := newCertificateValidUntil(t, commonName, notAfter)
 	return writeFile(t, dir, "certificate.pem", certificatePEM), writeFile(t, dir, "key.pem", keyPEM)
 }
 
