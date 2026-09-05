@@ -65,4 +65,5 @@ Before a delta between this file and the template is called stale, read it again
 | `adr/0017-an-unreconciled-environments-values-live-in-an-overlay-here.md` | Keep an environment's values where that environment is reconciled, and in an overlay here where nothing reconciles it | accepted |
 | `adr/0018-keep-the-image-of-an-agent-this-operator-constructed-current-with-its-own-configuration.md` | Keep the image of an agent this operator constructed current with its own configuration | accepted |
 | `adr/0019-mount-an-agents-tool-tree-from-an-image-this-operator-names.md` | Mount an agent's tool tree from an image this operator names, and point the agent at it | accepted |
-| `adr/0020-enroll-this-operator-with-a-one-time-token-and-keep-the-key-it-generated.md` | Enroll this operator with a one-time token, and keep the key it generated | accepted |
+| `adr/0020-enroll-this-operator-with-a-one-time-token-and-keep-the-key-it-generated.md` | Enroll this operator with a one-time token, and keep the key it generated | superseded by ADR-0021 |
+| `adr/0021-present-any-one-enrollment-token-once-and-wait-for-another.md` | Present any one enrollment token once and wait for another, and end the enrollment on a certificate rather than on an attempt | accepted |
