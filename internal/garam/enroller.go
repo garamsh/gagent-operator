@@ -59,7 +59,7 @@ func EnrollmentTLS(trustFile string) (*tls.Config, error) {
 // refusal. A token is one attempt and not one certificate: presenting the same
 // token again can only fail while reading as though the state were still open,
 // which says nothing about a token this operator has not presented. What ends
-// it is a certificate rather than an attempt.
+// it is a certificate that has not expired, rather than an attempt.
 type Enroller struct {
 	client *Client
 	store  CredentialStore
@@ -91,8 +91,8 @@ type Enroller struct {
 // what garam answers through store.
 //
 // client reaches garam presenting no certificate, which is what [EnrollmentTLS]
-// answers with: an operator that has one does not enroll, and one that has none
-// cannot present it.
+// answers with: an operator whose certificate still authenticates does not
+// enroll, and one whose certificate has expired holds nothing garam would take.
 func NewEnroller(client *Client, store CredentialStore, tokenFile, certificateFile, keyFile, trustFile string) *Enroller {
 	return &Enroller{
 		client:          client,
@@ -104,10 +104,10 @@ func NewEnroller(client *Client, store CredentialStore, tokenFile, certificateFi
 	}
 }
 
-// Start enrolls this operator and returns once it holds a certificate, which is
-// what makes an Enroller a manager.Runnable. It returns no error: an error here
-// stops the manager, and a token that cannot be spent stops nothing else this
-// operator does.
+// Start enrolls this operator and returns once it holds a certificate that has
+// not expired, which is what makes an Enroller a manager.Runnable. It returns no
+// error: an error here stops the manager, and a token that cannot be spent stops
+// nothing else this operator does.
 func (e *Enroller) Start(ctx context.Context) error {
 	if e.attempt(ctx) {
 		return nil
@@ -123,17 +123,27 @@ func (e *Enroller) Start(ctx context.Context) error {
 // attempt enrolls where there is a token this operator has not presented, and
 // reports whether there is anything left to wait for.
 //
-// A certificate ends it and nothing else does: one this operator can already
-// read, because enrollment is what an operator with none asks for and one that
-// holds one would be spending a token to replace what the [Renewer] renews, or
-// one this attempt obtained and stored. A token already presented is read again
+// A certificate ends it and nothing else does: one this operator already holds
+// that has not expired, because that one is what the [Renewer] renews and
+// spending a token to replace it would burn a registration on a credential that
+// still works, or one this attempt obtained and stored. A certificate that
+// expired ends nothing — it authenticates no call, so an operator holding one is
+// in the state enrollment exists for. A token already presented is read again
 // and passed over, so what is waited on is a token rather than an answer.
 func (e *Enroller) attempt(ctx context.Context) bool {
 	log := logf.FromContext(ctx).WithName("garam")
 
-	if _, err := operatorCertificate(e.certificateFile, e.keyFile); err == nil {
-		log.Info("Enrolling nothing: this operator holds a certificate already")
+	expiry, held := operatorCertificateExpiry(e.certificateFile, e.keyFile)
+	switch {
+	case held && time.Now().Before(expiry):
+		log.Info("Enrolling nothing: this operator holds a certificate that has not expired",
+			"notAfter", expiry)
 		return true
+	case held:
+		// Said at each look, at the level an absent token file is said at. What
+		// says this operator is enrolling at all is the line Start emits once.
+		log.V(1).Info("Enrolling this operator: the certificate it holds has expired",
+			"notAfter", expiry, "file", e.certificateFile)
 	}
 
 	token, err := os.ReadFile(e.tokenFile)
@@ -251,6 +261,26 @@ func certificateFingerprints(encoded []byte) []string {
 		sum := sha256.Sum256(block.Bytes)
 		fingerprints = append(fingerprints, hex.EncodeToString(sum[:]))
 	}
+}
+
+// operatorCertificateExpiry answers when the certificate this operator holds
+// stops being valid, and false where it holds none to read.
+//
+// The pair is loaded the way the handshake loads it, so a certificate stored
+// beside a key it was not signed for is no certificate here either. What is read
+// off one that does load is notAfter alone: garam publishes no revocation list
+// and runs no responder, so expiry is the whole of what stops a certificate
+// authenticating, and a notBefore still ahead names one that is about to work
+// rather than one that has stopped.
+//
+// Leaf is what the pair parsed to. crypto/tls populates it on every successful
+// LoadX509KeyPair from Go 1.23 on, and this module is built at 1.26 (go.mod).
+func operatorCertificateExpiry(certificateFile, keyFile string) (time.Time, bool) {
+	certificate, err := operatorCertificate(certificateFile, keyFile)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return certificate.Leaf.NotAfter, true
 }
 
 // tokenDigest is the SHA-256 of a token, hex-encoded. It is what an Enroller

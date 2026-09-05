@@ -420,22 +420,43 @@ func TestEnrollerStoresTheCertificateBesideTheKeyItGenerated(t *testing.T) {
 	g.Expect(stub.requests()[0].path).To(Equal(enrollmentPath))
 }
 
-// TestEnrollerSpendsNothingWhereThisOperatorHoldsACertificate keeps a restart
-// from spending a token nobody asked it to spend. A certificate this operator
-// can read is one the renewer renews, and enrollment is what an operator with
-// none asks for.
-func TestEnrollerSpendsNothingWhereThisOperatorHoldsACertificate(t *testing.T) {
+// TestEnrollerSpendsATokenOnAnExpiredCertificateAndNothingOnALiveOne is what
+// makes an operator whose credential lapsed recoverable. A certificate that
+// expired authenticates nothing, so the renewal that would replace it is
+// refused for holding it, and an operator that read it as an identity would
+// wait on a route it had closed against itself.
+//
+// The control is the live certificate, which is the credential the renewer
+// renews and no token replaces: a restart must not spend one to replace what
+// still works. The two differ in notAfter alone — same helper, same loop, same
+// listener — so what tells them apart is the validity read off the pair and not
+// whether a pair could be read.
+func TestEnrollerSpendsATokenOnAnExpiredCertificateAndNothingOnALiveOne(t *testing.T) {
 	g := NewWithT(t)
 	stub := newEnrollmentStub(t)
 	store := newRecordingStore(nil)
 	dir := t.TempDir()
-	writeIdentity(t, dir, "operator")
+	writeIdentityValidUntil(t, dir, "operator", time.Now().Add(-time.Hour))
 
 	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", dir))
 
 	g.Eventually(stopped, time.Second*10).Should(BeClosed())
-	g.Expect(stub.requests()).To(BeEmpty())
-	g.Expect(store.written).To(BeEmpty())
+	g.Expect(stub.requests()).To(HaveLen(1))
+	g.Expect(stub.requests()[0].path).To(Equal(enrollmentPath))
+	g.Expect(store.written).To(HaveLen(1))
+
+	// The control: the same certificate an hour from expiring rather than an
+	// hour past it.
+	live := newEnrollmentStub(t)
+	liveStore := newRecordingStore(nil)
+	liveDir := t.TempDir()
+	writeIdentityValidUntil(t, liveDir, "operator", time.Now().Add(time.Hour))
+
+	liveStopped := startEnroller(t, context.Background(), newEnroller(t, live, liveStore, "a-token", liveDir))
+
+	g.Eventually(liveStopped, time.Second*10).Should(BeClosed())
+	g.Expect(live.requests()).To(BeEmpty())
+	g.Expect(liveStore.written).To(BeEmpty())
 }
 
 // TestEnrollerWaitsWhereThereIsNoTokenToSpend is what makes a deployment that
