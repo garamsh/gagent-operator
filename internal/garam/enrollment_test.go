@@ -466,15 +466,22 @@ func TestEnrollerWaitsWhereThereIsNoTokenToSpend(t *testing.T) {
 // TestEnrollerPresentsARefusedTokenOnce is the property a retry would break. A
 // token is spent by the call that presents it, so a second call presents one
 // that is gone and reports a state that has already moved.
+//
+// The refused token is the only one in the file and is read again before this
+// asserts, so one request is what a token buys however often it is read. A loop
+// that had stopped would read the same way here, and what separates the two is
+// [TestEnrollerPresentsAReplacementTokenAndNeverTheOneItSpent].
 func TestEnrollerPresentsARefusedTokenOnce(t *testing.T) {
 	g := NewWithT(t)
 	stub := newStubListener(t, answerStatus(http.StatusUnauthorized))
 	store := newRecordingStore(nil)
 
-	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", t.TempDir()))
+	startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", t.TempDir()))
 
-	g.Eventually(stopped, time.Second*10).Should(BeClosed())
-	g.Expect(stub.requests()).To(HaveLen(1))
+	g.Eventually(stub.requests, time.Second*10).Should(HaveLen(1))
+	// Longer than the interval the token file is read on, so the refused token
+	// is read again before this is asserted.
+	g.Consistently(stub.requests, time.Second*12).Should(HaveLen(1))
 	g.Expect(store.written).To(BeEmpty())
 }
 
@@ -486,13 +493,23 @@ func newEnrollmentStubRefusing(t *testing.T, refused string) *stubListener {
 
 	var stub *stubListener
 	stub = newStubListener(t, func(w http.ResponseWriter, r *http.Request) {
-		presented, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("read the enrollment presented: %v", err)
 			return
 		}
-		r.Body = io.NopCloser(bytes.NewReader(presented))
-		if strings.Contains(string(presented), `"token":"`+refused+`"`) {
+		// Put back what was read, because the handler behind this reads the
+		// same request.
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		presented := struct {
+			Token string `json:"token"`
+		}{}
+		if err := json.Unmarshal(body, &presented); err != nil {
+			t.Errorf("decode the enrollment presented: %v", err)
+			return
+		}
+		if presented.Token == refused {
 			answerStatus(http.StatusUnauthorized)(w, r)
 			return
 		}
@@ -504,13 +521,13 @@ func newEnrollmentStubRefusing(t *testing.T, refused string) *stubListener {
 // TestEnrollerPresentsAReplacementTokenAndNeverTheOneItSpent is what makes a
 // refused token something a person replaces rather than something a restart
 // recovers from. A token is spent by the call that presents it, so this
-// operator presents it once and reads the file at every tick after.
+// operator presents one once and goes on reading the file for another.
 //
-// The refusal is the first token: it stays in the file across a tick and is
-// presented no second time. The control is the second, which differs from it
-// only in never having been presented and reaches this operator through the
-// same file, the same loop and the same listener — so what holds the first back
-// is the record of having spent it, and not a loop that stopped.
+// The refusal is the first token: it stays in the file across a look that reads
+// it again and is presented no second time. The control is the second, which
+// differs from it only in never having been presented and reaches this operator
+// through the same file, the same loop and the same listener — so what holds
+// the first back is the record of having spent it, and not a loop that stopped.
 func TestEnrollerPresentsAReplacementTokenAndNeverTheOneItSpent(t *testing.T) {
 	g := NewWithT(t)
 	stub := newEnrollmentStubRefusing(t, "a-refused-token")
@@ -520,12 +537,13 @@ func TestEnrollerPresentsAReplacementTokenAndNeverTheOneItSpent(t *testing.T) {
 	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-refused-token", dir))
 
 	g.Eventually(stub.requests, time.Second*10).Should(HaveLen(1))
-	// Longer than the interval the file is read on, so the refused token is
-	// read again while it is still the only token there.
-	g.Consistently(stopped, time.Second*12).ShouldNot(BeClosed())
-	g.Expect(stub.requests()).To(HaveLen(1))
+	// Longer than the interval the token file is read on, so the refused token
+	// is read again while it is still the only token there.
+	g.Consistently(stub.requests, time.Second*12).Should(HaveLen(1))
+	g.Expect(stopped).NotTo(BeClosed())
 
-	// The control: a token this operator has not presented, in the same file.
+	// The control: a token this operator has not presented, reaching it through
+	// the same file, the same loop and the same listener.
 	writeFile(t, dir, "enrollment-token", []byte("a-replacement-token"))
 
 	g.Eventually(stopped, time.Second*15).Should(BeClosed())
@@ -547,9 +565,12 @@ func TestEnrollerAsksForNothingElseWhereTheStoreRefusesTheAnswer(t *testing.T) {
 
 	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", t.TempDir()))
 
-	g.Eventually(func() int { return len(store.written) }, time.Second*10).Should(Equal(1))
-	g.Consistently(stopped, time.Millisecond*200).ShouldNot(BeClosed())
-	g.Expect(stub.requests()).To(HaveLen(1))
+	g.Eventually(stub.requests, time.Second*10).Should(HaveLen(1))
+	// Longer than the interval the token file is read on, so the spent token is
+	// read again before this is asserted.
+	g.Consistently(stub.requests, time.Second*12).Should(HaveLen(1))
+	g.Expect(stopped).NotTo(BeClosed())
+	g.Expect(store.written).To(HaveLen(1))
 }
 
 // recordedLog collects what an Enroller logged, so that a line it emits and
