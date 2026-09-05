@@ -111,6 +111,15 @@ cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
 	@"$(KIND)" delete cluster --name $(KIND_CLUSTER) --kubeconfig "$(KUBECONFIG_E2E)"
 	@rm -f "$(KUBECONFIG_E2E)"
 
+# Every golangci-lint invocation below analyses against a cache scoped to this
+# checkout. The default location is per-user, and each entry carries the
+# absolute path the file was first seen at, so a second checkout holding
+# identical content inherits results keyed to the first's paths -- which the
+# `generated` and `nolint` exclusions then cannot open, and issues they would
+# have filtered are reported instead (#71). `lint-coverage` overrides this with
+# the temporary cache its probe needs.
+export GOLANGCI_LINT_CACHE = $(LOCALBIN)/golangci-lint-cache
+
 .PHONY: lint
 lint: lint-coverage golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
