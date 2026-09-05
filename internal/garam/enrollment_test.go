@@ -1,6 +1,7 @@
 package garam_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -14,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"os"
@@ -476,11 +478,68 @@ func TestEnrollerPresentsARefusedTokenOnce(t *testing.T) {
 	g.Expect(store.written).To(BeEmpty())
 }
 
-// TestEnrollerAsksForNothingElseWhereTheStoreRefusesTheAnswer is the loss this
-// cannot recover from. garam signed a key it never held and answers no second
-// copy, so a certificate the store would not take exists nowhere and the token
-// that bought it is spent: what asks again is a person registering, and a second
-// call here would present a token that is already gone.
+// newEnrollmentStubRefusing starts a listener answering enrollments as
+// [newEnrollmentStub] does, except for the one token it refuses: that one is
+// answered the way garam answers a token it will not take.
+func newEnrollmentStubRefusing(t *testing.T, refused string) *stubListener {
+	t.Helper()
+
+	var stub *stubListener
+	stub = newStubListener(t, func(w http.ResponseWriter, r *http.Request) {
+		presented, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read the enrollment presented: %v", err)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(presented))
+		if strings.Contains(string(presented), `"token":"`+refused+`"`) {
+			answerStatus(http.StatusUnauthorized)(w, r)
+			return
+		}
+		answerEnrollment(t, readFile(t, stub.trustFile))(w, r)
+	})
+	return stub
+}
+
+// TestEnrollerPresentsAReplacementTokenAndNeverTheOneItSpent is what makes a
+// refused token something a person replaces rather than something a restart
+// recovers from. A token is spent by the call that presents it, so this
+// operator presents it once and reads the file at every tick after.
+//
+// The refusal is the first token: it stays in the file across a tick and is
+// presented no second time. The control is the second, which differs from it
+// only in never having been presented and reaches this operator through the
+// same file, the same loop and the same listener — so what holds the first back
+// is the record of having spent it, and not a loop that stopped.
+func TestEnrollerPresentsAReplacementTokenAndNeverTheOneItSpent(t *testing.T) {
+	g := NewWithT(t)
+	stub := newEnrollmentStubRefusing(t, "a-refused-token")
+	store := newRecordingStore(nil)
+	dir := t.TempDir()
+
+	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-refused-token", dir))
+
+	g.Eventually(stub.requests, time.Second*10).Should(HaveLen(1))
+	// Longer than the interval the file is read on, so the refused token is
+	// read again while it is still the only token there.
+	g.Consistently(stopped, time.Second*12).ShouldNot(BeClosed())
+	g.Expect(stub.requests()).To(HaveLen(1))
+
+	// The control: a token this operator has not presented, in the same file.
+	writeFile(t, dir, "enrollment-token", []byte("a-replacement-token"))
+
+	g.Eventually(stopped, time.Second*15).Should(BeClosed())
+	g.Expect(stub.requests()).To(HaveLen(2))
+	g.Expect(stub.requests()[1].body).To(ContainSubstring(`"token":"a-replacement-token"`))
+	g.Expect(store.written).To(HaveLen(1))
+}
+
+// TestEnrollerAsksForNothingElseWhereTheStoreRefusesTheAnswer is the loss no
+// token but another one recovers. garam signed a key it never held and answers
+// no second copy, so a certificate the store would not take exists nowhere and
+// the token that bought it is spent: a second call with it would present a token
+// that is already gone. What recovers it is another token, so this waits for one
+// rather than ending.
 func TestEnrollerAsksForNothingElseWhereTheStoreRefusesTheAnswer(t *testing.T) {
 	g := NewWithT(t)
 	stub := newEnrollmentStub(t)
@@ -488,9 +547,9 @@ func TestEnrollerAsksForNothingElseWhereTheStoreRefusesTheAnswer(t *testing.T) {
 
 	stopped := startEnroller(t, context.Background(), newEnroller(t, stub, store, "a-token", t.TempDir()))
 
-	g.Eventually(stopped, time.Second*10).Should(BeClosed())
+	g.Eventually(func() int { return len(store.written) }, time.Second*10).Should(Equal(1))
+	g.Consistently(stopped, time.Millisecond*200).ShouldNot(BeClosed())
 	g.Expect(stub.requests()).To(HaveLen(1))
-	g.Expect(store.written).To(HaveLen(1))
 }
 
 // recordedLog collects what an Enroller logged, so that a line it emits and

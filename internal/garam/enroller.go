@@ -55,12 +55,20 @@ func EnrollmentTLS(trustFile string) (*tls.Config, error) {
 // that presents it, so two processes enrolling one identity leave one of them
 // holding nothing and a person registering again.
 //
-// It attempts once and never twice. A token is one attempt and not one
-// certificate: a refused token is one to register again for, and a retry can
-// only fail while reading as though the state were still open.
+// It presents any one token once and never twice, and goes on looking after a
+// refusal. A token is one attempt and not one certificate: presenting the same
+// token again can only fail while reading as though the state were still open,
+// which says nothing about a token this operator has not presented. What ends
+// it is a certificate rather than an attempt.
 type Enroller struct {
 	client *Client
 	store  CredentialStore
+
+	// spent is the SHA-256 of every token this operator has presented, which is
+	// what says a token read again is the attempt it already was. Digests
+	// rather than tokens, because nothing here holds a token past the call that
+	// presents it.
+	spent []string
 
 	// tokenFile is where the token is read from. It is a path so that the token
 	// reaches this process the way the credential does — as a file the kubelet
@@ -96,9 +104,10 @@ func NewEnroller(client *Client, store CredentialStore, tokenFile, certificateFi
 	}
 }
 
-// Start enrolls this operator once and returns, which is what makes an Enroller a
-// manager.Runnable. It returns no error: an error here stops the manager, and a
-// token that cannot be spent stops nothing else this operator does.
+// Start enrolls this operator and returns once it holds a certificate, which is
+// what makes an Enroller a manager.Runnable. It returns no error: an error here
+// stops the manager, and a token that cannot be spent stops nothing else this
+// operator does.
 func (e *Enroller) Start(ctx context.Context) error {
 	if e.attempt(ctx) {
 		return nil
@@ -111,13 +120,14 @@ func (e *Enroller) Start(ctx context.Context) error {
 	return nil
 }
 
-// attempt enrolls where there is a token to enroll with, and reports whether
-// there is anything left to wait for.
+// attempt enrolls where there is a token this operator has not presented, and
+// reports whether there is anything left to wait for.
 //
-// A certificate this operator can already read ends it: enrollment is what an
-// operator with none asks for, and one that holds one would be spending a token
-// to replace a certificate the [Renewer] renews. So does a token that has been
-// presented, whatever came back.
+// A certificate ends it and nothing else does: one this operator can already
+// read, because enrollment is what an operator with none asks for and one that
+// holds one would be spending a token to replace what the [Renewer] renews, or
+// one this attempt obtained and stored. A token already presented is read again
+// and passed over, so what is waited on is a token rather than an answer.
 func (e *Enroller) attempt(ctx context.Context) bool {
 	log := logf.FromContext(ctx).WithName("garam")
 
@@ -139,34 +149,44 @@ func (e *Enroller) attempt(ctx context.Context) bool {
 	if presented == "" {
 		return false
 	}
+	if slices.Contains(e.spent, tokenDigest(presented)) {
+		return false
+	}
 
-	e.enroll(ctx, presented)
-	return true
+	return e.enroll(ctx, presented)
 }
 
 // enroll spends the token: it generates a key, asks garam to sign a request over
 // it, and stores the certificate that comes back beside the key it was signed
-// for. Nothing it fails at is retried here.
-func (e *Enroller) enroll(ctx context.Context, token string) {
+// for. It reports whether this operator now holds a certificate, and nothing it
+// fails at is tried again with this token.
+func (e *Enroller) enroll(ctx context.Context, token string) bool {
 	log := logf.FromContext(ctx).WithName("garam")
 
 	request, err := NewCertificateRequest()
 	if err != nil {
 		log.Error(err, "Cannot enroll this operator. Nothing was presented and the token stands, "+
-			"so what tries again is this operator restarted")
-		return
+			"so what presents it is the next look at this file", "file", e.tokenFile)
+		return false
 	}
+
+	// Recorded at the call that presents the token rather than at what the call
+	// answers: garam spends a token on the attempt, so one presented here is
+	// gone whether or not an answer came back.
+	e.spent = append(e.spent, tokenDigest(token))
 
 	enrolled, err := e.client.Enroll(ctx, token, request)
 	switch {
 	case errors.Is(err, ErrTokenNotUsable):
 		log.Error(err, "Cannot enroll this operator. Spent, expired and never-minted are one answer "+
-			"and nothing here tells them apart: register this operator again for another token")
-		return
+			"and nothing here tells them apart: ask for another token, which this operator presents "+
+			"from this file without being restarted", "file", e.tokenFile)
+		return false
 	case err != nil:
 		log.Error(err, "Failed to enroll this operator. A token is spent by the call that presents it, "+
-			"so this one is gone if the call reached garam: register this operator again for another")
-		return
+			"so this one is gone if the call reached garam: ask for another token, which this operator "+
+			"presents from this file without being restarted", "file", e.tokenFile)
+		return false
 	}
 
 	e.reportServerRoot(ctx, enrolled.ServerRootPEM)
@@ -174,12 +194,14 @@ func (e *Enroller) enroll(ctx context.Context, token string) {
 	credential := Credential{CertificatePEM: enrolled.CertificatePEM, KeyPEM: request.KeyPEM}
 	if err := e.store.ReplaceCredential(ctx, credential); err != nil {
 		log.Error(err, "Lost the certificate this operator enrolled with. garam signed a key it never "+
-			"held and can answer no second copy, and the token is spent: register this operator again")
-		return
+			"held and can answer no second copy, and the token is spent: ask for another token, which "+
+			"this operator presents from this file without being restarted", "file", e.tokenFile)
+		return false
 	}
 	log.Info("Enrolled this operator. The kubelet carries the credential into the volume this "+
 		"operator reads it from, and the calls before it lands fail at the handshake",
 		"operator", enrolled.Operator, "notAfter", enrolled.NotAfter)
+	return true
 }
 
 // reportServerRoot says once where the garam server root the answer carries is
@@ -229,6 +251,14 @@ func certificateFingerprints(encoded []byte) []string {
 		sum := sha256.Sum256(block.Bytes)
 		fingerprints = append(fingerprints, hex.EncodeToString(sum[:]))
 	}
+}
+
+// tokenDigest is the SHA-256 of a token, hex-encoded. It is what an Enroller
+// remembers of one: enough to know a token read again is the one it presented,
+// and not the token itself.
+func tokenDigest(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // readFileOrNothing answers a file's contents, and nothing where it cannot be
