@@ -323,8 +323,11 @@ $(LOCALBIN):
 
 ## Tool Binaries
 # kubectl is not pinned the way the tools below are: k8s.io/kubernetes carries
-# replace directives, which `go install <pkg>@<version>` refuses. `make test-e2e`
-# reaches it through `make install` and `make deploy`, so it has to be on PATH.
+# replace directives, which `go install <pkg>@<version>` refuses. A pin here
+# would not reach the suite either — `test/e2e` and `test/utils` run `kubectl`
+# directly, past this variable — so the version a run gets is whatever is on
+# PATH, which Kubernetes supports only within one minor of the cluster kind
+# creates.
 KUBECTL ?= kubectl
 KIND ?= $(LOCALBIN)/kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
@@ -333,8 +336,10 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
-# The PM moves this pin and reviews it when the Kubernetes libraries move:
-# Dependabot reads go.mod, and kind is not a dependency of this module.
+# The PM moves the three pins below and reviews them when the Kubernetes
+# libraries move. No bot proposes a bump: `.github/dependabot.yml` configures
+# github-actions and docker, neither ecosystem reads a Makefile variable, and
+# none of these tools is a dependency of this module.
 KIND_VERSION ?= v0.33.0
 KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
@@ -349,6 +354,9 @@ ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
 
+# The PM moves this pin too, for the reason above. Nothing schedules the
+# review: no Kubernetes release bears on it, so it moves when a Go release or a
+# lint failure requires it.
 GOLANGCI_LINT_VERSION ?= v2.12.2
 
 .PHONY: kind
