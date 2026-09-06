@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -21,6 +23,12 @@ const (
 	// credentialsContainerName is the init container that copies the projected
 	// credential into the volume the agent reads it from.
 	credentialsContainerName = "credentials"
+
+	// workspaceContainerName is the container serving the files an agent reads
+	// and writes and the commands it runs. The agent executes nothing itself
+	// and reaches this process over the Pod's loopback interface
+	// (gagent@9b0e399:internal/workspace/server/serve.go:36-42).
+	workspaceContainerName = "workspace"
 
 	credentialsVolumeName       = "credentials"
 	credentialsSecretVolumeName = "credentials-secret"
@@ -42,6 +50,34 @@ const (
 	// it loads its tools from. The name is that project's, because this operator
 	// is writing that project's setting.
 	toolsDirVariable = "GAGENT_TOOLS_DIR"
+
+	// The four settings below are gagent's, under the GAGENT_ prefix and the
+	// dash-to-underscore mapping every one of its settings resolves through
+	// (gagent@9b0e399:internal/config/config.go:276-277). listenAddressVariable
+	// and workspaceAddressVariable are the two ends of one link: the workspace's
+	// own addr and the agent's workspace-addr.
+	listenAddressVariable    = "GAGENT_ADDR"
+	workspaceAddressVariable = "GAGENT_WORKSPACE_ADDR"
+	workspaceDirVariable     = "GAGENT_WORKSPACE"
+	execUserVariable         = "GAGENT_EXEC_UID"
+
+	// workspaceAddress is where the workspace listens and where the agent dials.
+	// Both images default to it (gagent@9b0e399:internal/config/config.go:34),
+	// and it is written to both containers rather than left to them: two
+	// defaults agreeing is not the same as one number this operator chose, and
+	// nothing here would notice either image moving its own. It is loopback,
+	// which is the only bind gagent's unauthenticated listener accepts.
+	workspaceAddress = "127.0.0.1:8081"
+
+	// workspaceDirPath is the subtree of the state volume the workspace serves,
+	// and the only part of it the workspace touches. It is absolute and this
+	// operator's for the reason toolsMountPath is, and for a second: gagent's
+	// default is relative, the published workspace image declares no working
+	// directory, and the /data it therefore resolves against is root-owned at
+	// 0755 — which the user this Pod names cannot create in, so the workspace
+	// would exit at startup
+	// (gagent@9b0e399:internal/workspace/files/files.go:56).
+	workspaceDirPath = stateMountPath + "/workspace"
 
 	// credentialsFileMode keeps the projected credential files readable by the
 	// group the Pod carries and by nothing else. A Secret volume's files are
@@ -132,9 +168,9 @@ func claimedStorageSize(statefulSet *appsv1.StatefulSet) resource.Quantity {
 // leaves every other field as it found it, so that an unchanged Agent produces
 // an unchanged object. The fields a StatefulSet refuses a change to are written
 // at creation only. What the workload carries that no Agent names — the image
-// the credential's init container runs and the image an agent's tools are
-// mounted from — is read off the reconciler, which is where this operator's
-// own configuration reaches the workload.
+// the credential's init container runs, the image an agent's tools are mounted
+// from, and the image its workspace runs — is read off the reconciler, which is
+// where this operator's own configuration reaches the workload.
 func (r *AgentReconciler) applyAgent(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet) error {
 	if statefulSet.CreationTimestamp.IsZero() {
 		labels := workloadLabels(agent)
@@ -212,8 +248,8 @@ func (r *AgentReconciler) applyAgent(agent *agentv1alpha1.Agent, statefulSet *ap
 		{Name: credentialsVolumeName, MountPath: credentialsMountPath},
 		{Name: stateVolumeName, MountPath: stateMountPath},
 	}
-	// Written on every pass, so that an operator that stops naming a tools image
-	// stops pointing the agent at a tree the Pod no longer carries.
+	// Written on every pass, so that an operator that stops naming an image
+	// stops pointing the agent at what the Pod no longer carries.
 	container.Env = nil
 
 	// The whole of the tool tree, so that an operator naming no image builds the
@@ -235,10 +271,67 @@ func (r *AgentReconciler) applyAgent(agent *agentv1alpha1.Agent, statefulSet *ap
 			corev1.VolumeMount{Name: toolsVolumeName, MountPath: toolsMountPath, ReadOnly: true})
 		// The variable is what points the agent at the tree; the image's own
 		// entrypoint is left to run what it runs.
-		container.Env = []corev1.EnvVar{{Name: toolsDirVariable, Value: toolsMountPath}}
+		container.Env = append(container.Env, corev1.EnvVar{Name: toolsDirVariable, Value: toolsMountPath})
 	}
 
+	// The agent's end of the link, written only where the other end is built:
+	// an agent told where to dial with nothing listening there is the failure
+	// this container exists to remove, reported one call later instead of at
+	// startup.
+	if r.WorkspaceImage != "" {
+		container.Env = append(container.Env,
+			corev1.EnvVar{Name: workspaceAddressVariable, Value: workspaceAddress})
+	}
+
+	// Last, because appending to the container slice can move it and leave
+	// every pointer taken out of it above stale.
+	r.applyWorkspace(statefulSet)
+
 	return controllerutil.SetControllerReference(agent, statefulSet, r.Scheme)
+}
+
+// applyWorkspace builds the container an agent's files and commands are served
+// by, and removes it again where this operator names no workspace image — so
+// that an operator that stops naming one builds the workload it built before
+// one could be named. It is not folded into the tool tree's shape above: that
+// one adds a volume and a variable to a container, and this one adds a
+// container, which is the thing every pointer into the slice depends on.
+func (r *AgentReconciler) applyWorkspace(statefulSet *appsv1.StatefulSet) {
+	containers := &statefulSet.Spec.Template.Spec.Containers
+	if r.WorkspaceImage == "" {
+		*containers = slices.DeleteFunc(*containers, func(container corev1.Container) bool {
+			return container.Name == workspaceContainerName
+		})
+
+		return
+	}
+
+	workspace := containerNamed(containers, workspaceContainerName)
+	workspace.Image = r.WorkspaceImage
+	// Pulled at every start on the ground the agent's image is: it is gagent's
+	// image and that project requires a consumer to pull always.
+	workspace.ImagePullPolicy = corev1.PullAlways
+	workspace.SecurityContext = containerSecurityContext()
+	// The image's own entrypoint already serves the workspace, so every setting
+	// reaches it through the environment and this operator writes no command —
+	// the road the tool tree's directory already travels.
+	workspace.Env = []corev1.EnvVar{
+		{Name: listenAddressVariable, Value: workspaceAddress},
+		{Name: workspaceDirVariable, Value: workspaceDirPath},
+		// gagent runs an exec child under the workspace's own account only
+		// where this number is the uid that account already has, and refuses
+		// every isolated exec otherwise
+		// (gagent@9b0e399:internal/workspace/shell/process_linux.go:131). The
+		// Pod names that uid, so this operator is the only party that can tell
+		// the workspace what it is.
+		{Name: execUserVariable, Value: strconv.Itoa(agentRunAsUser)},
+	}
+	// The agent's container holds this volume too, so the two processes are
+	// kept to disjoint subtrees of it: workspaceDirPath is the workspace's, and
+	// nothing but these constants keeps them apart. The credential's copy is not
+	// mounted here — the workspace reads no credential, and every container
+	// mounting it is one more that can.
+	workspace.VolumeMounts = []corev1.VolumeMount{{Name: stateVolumeName, MountPath: stateMountPath}}
 }
 
 // containerNamed returns the container called name out of containers, appending
