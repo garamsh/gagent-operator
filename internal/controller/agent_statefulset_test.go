@@ -21,6 +21,15 @@ import (
 	agentv1alpha1 "github.com/garamsh/gagent-operator/api/v1alpha1"
 )
 
+// testPinnedTool is the tool the specs declare a pin for. It is gagent's one
+// required tool, so a declaration leaving it out is an agent that cannot start
+// whatever else the set names.
+const testPinnedTool = "message_send"
+
+// testToolPin is a pin the way an operator writes one. It is opaque to this
+// operator, which is why no spec asserts anything about its shape.
+const testToolPin = "sha256:aa"
+
 var _ = Describe("Agent workload", func() {
 	It("builds the StatefulSet the Agent describes, and owns it", func() {
 		name := "builds-its-workload"
@@ -459,7 +468,7 @@ var _ = Describe("Agent workload", func() {
 		name := "declares-a-tool-set"
 		createSecret(credentialsSecretName(name))
 		agent := newAgent(name)
-		agent.Spec.Tools.Pins = map[string]string{"message_send": "sha256:aa", "files": "sha256:bb"}
+		agent.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin, "files": "sha256:bb"}
 		createAgent(agent)
 
 		_, err := reconcileAgentWithTools(name)
@@ -484,7 +493,7 @@ var _ = Describe("Agent workload", func() {
 
 		By("carrying the file's text to that container and to nothing the agent spawns")
 		Expect(environmentOf(config)).To(HaveKeyWithValue(configContentVariable,
-			SatisfyAll(ContainSubstring("message_send: sha256:aa"), ContainSubstring("files: sha256:bb"))))
+			SatisfyAll(ContainSubstring(testPinnedTool+": "+testToolPin), ContainSubstring("files: sha256:bb"))))
 		agentContainer := containerOf(pod, agentContainerName)
 		Expect(environmentOf(agentContainer)).NotTo(HaveKey(configContentVariable))
 
@@ -500,7 +509,7 @@ var _ = Describe("Agent workload", func() {
 		// types. This one closes the quoting a command would carry it in.
 		pins := map[string]string{
 			"files":        `sha256:bb" ; touch escaped ; echo "`,
-			"message_send": "sha256:aa",
+			testPinnedTool: testToolPin,
 		}
 		file, err := renderAgentConfig(agentv1alpha1.AgentSpec{Tools: agentv1alpha1.ToolSet{Pins: pins}})
 		Expect(err).NotTo(HaveOccurred())
@@ -535,7 +544,7 @@ var _ = Describe("Agent workload", func() {
 		withoutPins := statefulSetFor(name).Spec.Template.Spec
 
 		edited := readAgent(name)
-		edited.Spec.Tools.Pins = map[string]string{"message_send": "sha256:aa"}
+		edited.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin}
 		Expect(k8sClient.Update(ctx, edited)).To(Succeed())
 
 		_, err = reconcileAgentWithTools(name)
@@ -552,7 +561,7 @@ var _ = Describe("Agent workload", func() {
 		name := "stops-declaring-tools"
 		createSecret(credentialsSecretName(name))
 		agent := newAgent(name)
-		agent.Spec.Tools.Pins = map[string]string{"message_send": "sha256:aa"}
+		agent.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin}
 		createAgent(agent)
 
 		_, err := reconcileAgentWithTools(name)
@@ -576,7 +585,7 @@ var _ = Describe("Agent workload", func() {
 		name := "restricted-admits-the-config"
 		createSecret(credentialsSecretName(name))
 		agent := newAgent(name)
-		agent.Spec.Tools.Pins = map[string]string{"message_send": "sha256:aa"}
+		agent.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin}
 		createAgent(agent)
 
 		_, err := reconcileAgentWithTools(name)
