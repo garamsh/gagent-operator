@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"os"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +16,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/yaml"
+
+	agentv1alpha1 "github.com/garamsh/gagent-operator/api/v1alpha1"
+)
+
+// testPinnedTool is the tool the specs declare a pin for. It is gagent's one
+// required tool, so a declaration leaving it out is an agent that cannot start
+// whatever else the set names.
+const testPinnedTool = "message_send"
+
+// testToolPin is a pin the way an operator writes one. It is opaque to this
+// operator, which is why no spec asserts anything about its shape.
+const testToolPin = "sha256:aa"
+
+// testSecondTool and testSecondPin are a second tool in a declaration, which is
+// what says a set is carried whole rather than one tool at a time.
+const (
+	testSecondTool = "files"
+	testSecondPin  = "sha256:bb"
 )
 
 var _ = Describe("Agent workload", func() {
@@ -450,6 +471,153 @@ var _ = Describe("Agent workload", func() {
 			To(MatchError(ContainSubstring(`violates PodSecurity "restricted:latest"`)))
 	})
 
+	It("writes the tool set an Agent declares into a file the agent reads, and points the agent at it", func() {
+		name := "declares-a-tool-set"
+		createSecret(credentialsSecretName(name))
+		agent := newAgent(name)
+		agent.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin, testSecondTool: testSecondPin}
+		createAgent(agent)
+
+		_, err := reconcileAgentWithTools(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		pod := statefulSetFor(name).Spec.Template.Spec
+
+		By("writing it into a volume of its own, which is not the memory a credential's copy takes")
+		written := volumeNamed(pod, configVolumeName)
+		Expect(written.EmptyDir).NotTo(BeNil())
+		Expect(written.EmptyDir.Medium).To(BeEmpty())
+
+		By("writing it before the agent starts, at a mode gagent does not refuse")
+		config := initContainerOf(pod, configContainerName)
+		Expect(config.Image).To(Equal(testCopyImage))
+		Expect(config.ImagePullPolicy).To(Equal(corev1.PullAlways))
+		script := strings.Join(config.Command, " ")
+		Expect(script).To(ContainSubstring("umask 077"))
+		Expect(script).To(ContainSubstring(configFileIn(configMountPath)))
+		Expect(config.VolumeMounts).To(ConsistOf(
+			corev1.VolumeMount{Name: configVolumeName, MountPath: configMountPath}))
+
+		By("carrying the file's text to that container and to nothing the agent spawns")
+		Expect(environmentOf(config)).To(HaveKeyWithValue(configContentVariable,
+			SatisfyAll(ContainSubstring(testPinnedTool+": "+testToolPin), ContainSubstring(testSecondTool+": "+testSecondPin))))
+		agentContainer := containerOf(pod, agentContainerName)
+		Expect(environmentOf(agentContainer)).NotTo(HaveKey(configContentVariable))
+
+		By("giving the agent the file read-only and the directory it resolves one from")
+		Expect(agentContainer.VolumeMounts).To(ContainElement(corev1.VolumeMount{
+			Name: configVolumeName, MountPath: configMountPath, ReadOnly: true}))
+		Expect(environmentOf(agentContainer)).To(HaveKeyWithValue(configHomeVariable, configMountPath))
+	})
+
+	It("writes a config file only its owner can read, out of text no pin can turn into a command", func() {
+		dir := GinkgoT().TempDir()
+		// A pin is a string this operator does not read and a console user
+		// types. This one closes the quoting a command would carry it in.
+		pins := map[string]string{
+			testSecondTool: `sha256:bb" ; touch escaped ; echo "`,
+			testPinnedTool: testToolPin,
+		}
+		file, err := renderAgentConfig(agentv1alpha1.AgentSpec{Tools: agentv1alpha1.ToolSet{Pins: pins}})
+		Expect(err).NotTo(HaveOccurred())
+
+		command := writeConfigCommand(dir)
+		run := exec.Command(command[0], command[1:]...)
+		run.Dir = dir
+		run.Env = append(os.Environ(), configContentVariable+"="+file)
+		output, err := run.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(output))
+
+		By("leaving a file gagent's owner-only rule accepts")
+		info, err := os.Stat(configFileIn(dir))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o600)))
+
+		By("landing every pin in it exactly as it was declared")
+		content, err := os.ReadFile(configFileIn(dir))
+		Expect(err).NotTo(HaveOccurred())
+		written := agentConfig{}
+		Expect(yaml.Unmarshal(content, &written)).To(Succeed())
+		Expect(written.Tools.Pins).To(Equal(pins))
+	})
+
+	It("renders one declaration as one text, whatever order the declaration is held in", func() {
+		// Three tools, held in an order that is not the sorted one. A Go map is
+		// iterated in no fixed order, so a render reading it directly would put
+		// the same declaration in the workload differently from pass to pass,
+		// and every pass would rewrite the StatefulSet.
+		pins := map[string]string{"web_fetch": "sha256:cc", testPinnedTool: testToolPin, testSecondTool: testSecondPin}
+
+		file, err := renderAgentConfig(agentv1alpha1.AgentSpec{Tools: agentv1alpha1.ToolSet{Pins: pins}})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(file).To(Equal("tools:\n  pins:\n" +
+			"    " + testSecondTool + ": " + testSecondPin + "\n" +
+			"    " + testPinnedTool + ": " + testToolPin + "\n" +
+			"    web_fetch: sha256:cc\n"))
+	})
+
+	It("builds the Pod it built before a tool set could be declared where an Agent declares none", func() {
+		name := "declares-no-tools"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		_, err := reconcileAgentWithTools(name)
+		Expect(err).NotTo(HaveOccurred())
+		withoutPins := statefulSetFor(name).Spec.Template.Spec
+
+		edited := readAgent(name)
+		edited.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin}
+		Expect(k8sClient.Update(ctx, edited)).To(Succeed())
+
+		_, err = reconcileAgentWithTools(name)
+		Expect(err).NotTo(HaveOccurred())
+		withPins := statefulSetFor(name).Spec.Template.Spec
+
+		// The control: declaring a tool set moves the Pod, so the comparison
+		// below is what the declaration adds and not two reads of one state.
+		Expect(withPins).NotTo(Equal(withoutPins))
+		Expect(withoutToolPins(withPins)).To(Equal(withoutPins))
+	})
+
+	It("takes the config file back out when an Agent stops declaring a tool set", func() {
+		name := "stops-declaring-tools"
+		createSecret(credentialsSecretName(name))
+		agent := newAgent(name)
+		agent.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin}
+		createAgent(agent)
+
+		_, err := reconcileAgentWithTools(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(statefulSetFor(name).Spec.Template.Spec.InitContainers).To(HaveLen(2))
+
+		edited := readAgent(name)
+		edited.Spec.Tools = agentv1alpha1.ToolSet{}
+		Expect(k8sClient.Update(ctx, edited)).To(Succeed())
+
+		_, err = reconcileAgentWithTools(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		pod := statefulSetFor(name).Spec.Template.Spec
+		Expect(pod.InitContainers).To(HaveLen(1))
+		Expect(pod.InitContainers[0].Name).To(Equal(credentialsContainerName))
+		Expect(environmentOf(containerOf(pod, agentContainerName))).NotTo(HaveKey(configHomeVariable))
+	})
+
+	It("builds a Pod carrying a declared tool set that a namespace enforcing PodSecurity restricted admits", func() {
+		name := "restricted-admits-the-config"
+		createSecret(credentialsSecretName(name))
+		agent := newAgent(name)
+		agent.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin}
+		createAgent(agent)
+
+		_, err := reconcileAgentWithTools(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		pod := podOf(statefulSetFor(name), restrictedNamespace("admits-the-config"))
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+	})
+
 	It("leaves the root filesystem of every container writable, which restricted does not ask for", func() {
 		name := "writes-its-own-filesystem"
 		createSecret(credentialsSecretName(name))
@@ -531,6 +699,22 @@ func containerOf(pod corev1.PodSpec, name string) corev1.Container {
 	return corev1.Container{}
 }
 
+// initContainerOf returns the Pod's init container called name, and fails the
+// spec where it carries none.
+func initContainerOf(pod corev1.PodSpec, name string) corev1.Container {
+	GinkgoHelper()
+
+	for _, container := range pod.InitContainers {
+		if container.Name == name {
+			return container
+		}
+	}
+
+	Fail("the Pod carries no init container named " + name)
+
+	return corev1.Container{}
+}
+
 // environmentOf returns a container's environment as the map a spec reads one
 // variable out of, so that asserting on one says nothing about the order the
 // rest are written in.
@@ -557,6 +741,34 @@ func withoutWorkspace(pod corev1.PodSpec) corev1.PodSpec {
 			func(variable corev1.EnvVar) bool { return variable.Name == workspaceAddressVariable })
 		// A slice emptied is not a slice absent, and it is the absent one the
 		// Pod built without a workspace carries.
+		if len(stripped.Containers[i].Env) == 0 {
+			stripped.Containers[i].Env = nil
+		}
+	}
+
+	return stripped
+}
+
+// withoutToolPins returns the Pod spec with the config file's volume, the
+// container that writes it, the agent's mount of it and the variable pointing
+// the agent at it removed. What is left is what this operator builds for an
+// Agent declaring no tool set, so the two being equal is what says a declaration
+// nobody made adds nothing anywhere else.
+func withoutToolPins(pod corev1.PodSpec) corev1.PodSpec {
+	stripped := *pod.DeepCopy()
+	stripped.Volumes = slices.DeleteFunc(stripped.Volumes, func(volume corev1.Volume) bool {
+		return volume.Name == configVolumeName
+	})
+	stripped.InitContainers = slices.DeleteFunc(stripped.InitContainers, func(container corev1.Container) bool {
+		return container.Name == configContainerName
+	})
+	for i := range stripped.Containers {
+		stripped.Containers[i].VolumeMounts = slices.DeleteFunc(stripped.Containers[i].VolumeMounts,
+			func(mount corev1.VolumeMount) bool { return mount.Name == configVolumeName })
+		stripped.Containers[i].Env = slices.DeleteFunc(stripped.Containers[i].Env,
+			func(variable corev1.EnvVar) bool { return variable.Name == configHomeVariable })
+		// A slice emptied is not a slice absent, and it is the absent one the
+		// Pod built without a declared tool set carries.
 		if len(stripped.Containers[i].Env) == 0 {
 			stripped.Containers[i].Env = nil
 		}

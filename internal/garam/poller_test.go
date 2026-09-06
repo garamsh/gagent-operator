@@ -51,6 +51,10 @@ type recordingConstructor struct {
 	// configured with, which is what a correction clears.
 	stale map[garam.GRN]bool
 
+	// declared is the tool set each agent was constructed from, which is what a
+	// definition declares and this operator carries rather than decides.
+	declared map[garam.GRN]garam.ToolSet
+
 	// refusePlacement is what Construct answers instead of placing the
 	// credential, where it is set.
 	refusePlacement error
@@ -58,10 +62,11 @@ type recordingConstructor struct {
 
 func newRecordingConstructor() *recordingConstructor {
 	return &recordingConstructor{
-		built:  map[garam.GRN]bool{},
-		placed: map[garam.GRN]garam.AgentCredential{},
-		epochs: map[garam.GRN]int64{},
-		stale:  map[garam.GRN]bool{},
+		built:    map[garam.GRN]bool{},
+		placed:   map[garam.GRN]garam.AgentCredential{},
+		epochs:   map[garam.GRN]int64{},
+		stale:    map[garam.GRN]bool{},
+		declared: map[garam.GRN]garam.ToolSet{},
 	}
 }
 
@@ -72,11 +77,13 @@ func (c *recordingConstructor) HasCredential(_ context.Context, agent garam.GRN)
 	return placed, nil
 }
 
-func (c *recordingConstructor) Construct(_ context.Context, agent garam.GRN, epoch int64, credential garam.AgentCredential) error {
+func (c *recordingConstructor) Construct(_ context.Context, definition garam.Definition, epoch int64, credential garam.AgentCredential) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	agent := definition.Agent
 	c.built[agent] = true
 	c.epochs[agent] = epoch
+	c.declared[agent] = definition.Tools
 	if c.refusePlacement != nil {
 		return c.refusePlacement
 	}
@@ -116,6 +123,15 @@ func (c *recordingConstructor) credentials() map[garam.GRN]garam.AgentCredential
 	defer c.mu.Unlock()
 	held := map[garam.GRN]garam.AgentCredential{}
 	maps.Copy(held, c.placed)
+	return held
+}
+
+// toolSets is the tool set each agent was constructed from, by agent.
+func (c *recordingConstructor) toolSets() map[garam.GRN]garam.ToolSet {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	held := map[garam.GRN]garam.ToolSet{}
+	maps.Copy(held, c.declared)
 	return held
 }
 
@@ -290,6 +306,30 @@ func TestPollerConstructsTheAgentsItHoldsAClaimOn(t *testing.T) {
 		IssuerPEM:      []byte("an issuer"),
 		ServerRootPEM:  []byte("a root"),
 		NotAfter:       time.Date(2026, 8, 26, 15, 1, 43, 0, time.UTC),
+	}))
+}
+
+// TestPollerCarriesTheKeysItReadsToConstructionAndLeavesTheRestBehind is the
+// trust boundary this operator's closed key set buys. garam's values are a
+// third party's map, and what reaches construction is the selection parsed out
+// of it — so a key naming an image cannot arrive at the one writer of an agent's
+// image, whatever a console user types into a definition.
+func TestPollerCarriesTheKeysItReadsToConstructionAndLeavesTheRestBehind(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, answerDefinitionsAndCertificates(`[
+		{"agentGrn": "`+string(claimedAgent)+`", "values": {
+			"tools.pins.message_send": "sha256:aa",
+			"image": "example.com/somebody-elses:latest"
+		}, "claim": {"epoch": 1}}
+	]`, ""))
+	constructor := newRecordingConstructor()
+
+	runPoller(t, stub, constructor)
+
+	g.Eventually(func() map[garam.GRN]garam.ToolSet { return constructor.toolSets() }, pollTimeout).
+		Should(HaveKey(claimedAgent))
+	g.Expect(constructor.toolSets()[claimedAgent]).To(Equal(garam.ToolSet{
+		Pins: map[string]string{"message_send": "sha256:aa"},
 	}))
 }
 

@@ -43,7 +43,7 @@ func TestObservationsReadTheEpochAndTheReadinessOffTheAgentTheyAreOn(t *testing.
 	c := newClient(scheme)
 	building := newConstructor(t, scheme, c)
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
 	setAvailable(t, c, constructor.Name(sampleAgent), metav1.ConditionTrue)
 
 	observations, err := building.Observations(context.Background())
@@ -60,8 +60,8 @@ func TestObservationsReadNoReadyReplicaAsNoReplicaAndAnUnreadWorkloadAsUnobserve
 	c := newClient(scheme)
 	building := newConstructor(t, scheme, c)
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
-	g.Expect(building.Construct(context.Background(), otherAgent, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(otherAgent), sampleEpoch, sampleCredential)).To(Succeed())
 	setAvailable(t, c, constructor.Name(sampleAgent), metav1.ConditionFalse)
 	setAvailable(t, c, constructor.Name(otherAgent), metav1.ConditionUnknown)
 
@@ -97,7 +97,7 @@ func TestObservationsLeaveOutAnAgentThisOperatorHoldsNoRecordOf(t *testing.T) {
 
 	// The constructed agent beside it, so that an empty answer cannot be read
 	// as the user's Agent having been left out.
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
 	setAvailable(t, c, constructor.Name(sampleAgent), metav1.ConditionTrue)
 
 	observations, err := building.Observations(context.Background())

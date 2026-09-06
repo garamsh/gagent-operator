@@ -13,6 +13,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/yaml"
 
 	agentv1alpha1 "github.com/garamsh/gagent-operator/api/v1alpha1"
 )
@@ -24,6 +25,11 @@ const (
 	// credential into the volume the agent reads it from.
 	credentialsContainerName = "credentials"
 
+	// configContainerName is the init container that writes the config file an
+	// agent resolves its settings from. It is built only where an Agent declares
+	// something to write into one.
+	configContainerName = "config"
+
 	// workspaceContainerName is the container serving the files an agent reads
 	// and writes and the commands it runs. The agent executes nothing itself
 	// and reaches this process over the Pod's loopback interface
@@ -34,6 +40,7 @@ const (
 	credentialsSecretVolumeName = "credentials-secret"
 	stateVolumeName             = "state"
 	toolsVolumeName             = "tools"
+	configVolumeName            = "config"
 
 	// credentialsMountPath holds the copy the agent reads. credentialsSecretMountPath
 	// holds the projection the kubelet writes, and only the init container mounts it.
@@ -50,6 +57,34 @@ const (
 	// it loads its tools from. The name is that project's, because this operator
 	// is writing that project's setting.
 	toolsDirVariable = "GAGENT_TOOLS_DIR"
+
+	// configMountPath is the configuration directory the agent is given, and the
+	// one the file below is found under. It is absolute and this operator's for
+	// the reason toolsMountPath is: gagent's other two roads to a config file are
+	// a path relative to a working directory the agent's image declares and a
+	// flag this operator does not write, so the directory it resolves against
+	// would otherwise be one this operator did not choose
+	// (gagent@fc5fca4:internal/config/config.go:371-395).
+	configMountPath = "/run/gagent/config"
+
+	// configHomeVariable is the variable os.UserConfigDir reads that directory
+	// from. It is not one of gagent's settings and reaches no viper: gagent's own
+	// resolution is prefixed GAGENT_ (gagent@fc5fca4:internal/config/config.go:276-277),
+	// and this one is read by the standard library on the way to the file.
+	configHomeVariable = "XDG_CONFIG_HOME"
+
+	// configContentVariable carries the file's whole text to the init container
+	// that writes it. It is set on that container and on no other, so nothing the
+	// agent spawns inherits a pin set — which is the custody gagent refuses the
+	// environment road to keep (gagent@fc5fca4:internal/config/config.go:216-234).
+	configContentVariable = "AGENT_CONFIG_CONTENT"
+
+	// configFileMask leaves the file readable by its owner and nobody else.
+	// gagent refuses a config file carrying any group or other bit
+	// (gagent@fc5fca4:internal/config/owner_only.go), so an agent handed one it
+	// refuses does not start. A mask rather than a mode set afterwards, so the
+	// file is never briefly readable by anyone else.
+	configFileMask = "077"
 
 	// The four settings below are gagent's, under the GAGENT_ prefix and the
 	// dash-to-underscore mapping every one of its settings resolves through
@@ -126,6 +161,59 @@ func copyCredentialsCommand() []string {
 	return []string{"/bin/sh", "-ec", fmt.Sprintf(
 		"for f in %s/*; do install -m %s \"$f\" %s/; done",
 		credentialsSecretMountPath, credentialsCopyMode, credentialsMountPath)}
+}
+
+// configDirIn and configFileIn are where gagent looks for a config file under
+// the configuration directory dir. Both segments are that project's rather than
+// this operator's to choose (gagent@fc5fca4:internal/config/config.go:187
+// and :382-395); the directory they hang off is the part this operator names.
+func configDirIn(dir string) string { return dir + "/gagent" }
+
+func configFileIn(dir string) string { return configDirIn(dir) + "/config.yaml" }
+
+// agentConfig is the file an agent resolves its settings from, holding what this
+// operator has been taught to declare and nothing else. The field names are
+// gagent's setting names, because this operator is writing that project's file.
+//
+// A second key family joins it as a second field here: the file is the whole of
+// what an agent is configured with, so nothing about its shape is the pins'.
+type agentConfig struct {
+	Tools agentConfigTools `json:"tools"`
+}
+
+type agentConfigTools struct {
+	Pins map[string]string `json:"pins"`
+}
+
+// renderAgentConfig is the text of the config file an Agent's declaration
+// becomes.
+//
+// It is marshalled rather than assembled: a pin is a string this operator does
+// not read and cannot constrain, and the one place a foreign string can change
+// what a file means is where somebody wrote the file's syntax by hand. Map keys
+// marshal in sorted order, so one declaration renders one text and an unchanged
+// Agent leaves the workload unchanged.
+func renderAgentConfig(spec agentv1alpha1.AgentSpec) (string, error) {
+	file, err := yaml.Marshal(agentConfig{Tools: agentConfigTools{Pins: spec.Tools.Pins}})
+	if err != nil {
+		return "", fmt.Errorf("render the config file of the agent: %w", err)
+	}
+
+	return string(file), nil
+}
+
+// writeConfigCommand writes the agent's config file into dir before the agent
+// starts, at a mode only the user that reads it can reach.
+//
+// The text travels in the environment and is never part of the command. A pin
+// reaches this operator from a console field it does not read, and a value
+// interpolated into a command is one that can stop being a value — which is the
+// ground ci.md §Security baseline states for a pipeline's inputs, met here at an
+// init container's.
+func writeConfigCommand(dir string) []string {
+	return []string{"/bin/sh", "-ec", fmt.Sprintf(
+		"umask %s && mkdir -p %s && printf '%%s' \"$%s\" > %s",
+		configFileMask, configDirIn(dir), configContentVariable, configFileIn(dir))}
 }
 
 // reconcileStatefulSet brings the StatefulSet an Agent describes into being, or
@@ -283,11 +371,73 @@ func (r *AgentReconciler) applyAgent(agent *agentv1alpha1.Agent, statefulSet *ap
 			corev1.EnvVar{Name: workspaceAddressVariable, Value: workspaceAddress})
 	}
 
+	if err := r.applyToolPins(agent, statefulSet, container); err != nil {
+		return err
+	}
+
 	// Last, because appending to the container slice can move it and leave
 	// every pointer taken out of it above stale.
 	r.applyWorkspace(statefulSet)
 
 	return controllerutil.SetControllerReference(agent, statefulSet, r.Scheme)
+}
+
+// applyToolPins builds the config file an Agent's declared tool set becomes and
+// the init container that writes it, and takes both back out again where the
+// Agent declares nothing — so that an Agent that stops declaring a tool set
+// builds the workload it built before it declared one.
+//
+// The file is written into the Pod rather than mounted from an object of its
+// own. A ConfigMap would not remove this container: the kubelet ORs group access
+// into every file it writes into a volume of a Pod carrying a group, and this
+// Pod carries one, so a mounted file cannot be owner-only however its mode is
+// set — which is the same measurement credentialsFileMode records. It would buy
+// a name to invent and a permission to hold for a value that is not secret,
+// while the file still had to be copied to be readable at all.
+//
+// It takes no memory-backed volume, which is where this parts from the
+// credential ADR 0010 delivers: that volume answers a rule about key material,
+// and a pin set is public. The mode is not.
+func (r *AgentReconciler) applyToolPins(agent *agentv1alpha1.Agent, statefulSet *appsv1.StatefulSet,
+	container *corev1.Container) error {
+	initContainers := &statefulSet.Spec.Template.Spec.InitContainers
+	if len(agent.Spec.Tools.Pins) == 0 {
+		*initContainers = slices.DeleteFunc(*initContainers, func(initContainer corev1.Container) bool {
+			return initContainer.Name == configContainerName
+		})
+
+		return nil
+	}
+
+	file, err := renderAgentConfig(agent.Spec)
+	if err != nil {
+		return err
+	}
+
+	statefulSet.Spec.Template.Spec.Volumes = append(statefulSet.Spec.Template.Spec.Volumes, corev1.Volume{
+		Name: configVolumeName,
+		// Bounded by the Pod spec that carries the text rather than by a limit
+		// here: one file is written and the API server is what bounds its size.
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	})
+
+	config := containerNamed(initContainers, configContainerName)
+	config.Image = r.CopyImage
+	// Always, on the ground the credential's init container already carries: the
+	// image is the deployer's and nothing here requires its tag to name one build.
+	config.ImagePullPolicy = corev1.PullAlways
+	config.Command = writeConfigCommand(configMountPath)
+	config.Env = []corev1.EnvVar{{Name: configContentVariable, Value: file}}
+	config.SecurityContext = containerSecurityContext()
+	config.VolumeMounts = []corev1.VolumeMount{{Name: configVolumeName, MountPath: configMountPath}}
+
+	// Read-only, because the agent reads this file and writes nothing back to it.
+	container.VolumeMounts = append(container.VolumeMounts,
+		corev1.VolumeMount{Name: configVolumeName, MountPath: configMountPath, ReadOnly: true})
+	container.Env = append(container.Env,
+		corev1.EnvVar{Name: configHomeVariable, Value: configMountPath})
+
+	return nil
 }
 
 // applyWorkspace builds the container an agent's files and commands are served

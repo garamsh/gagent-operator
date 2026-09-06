@@ -18,15 +18,30 @@ type Definition struct {
 	// describes. No agent answers under it until the definition is claimed.
 	Agent GRN
 
-	// Values are what the operator constructs the agent from. garam stores the
-	// keys and the strings and interprets neither, so what they mean is this
-	// operator's contract rather than garam's.
-	Values map[string]string
+	// Tools is the tool set this definition declares, as the keys this operator
+	// reads out of garam's answer. garam stores the keys and the strings and
+	// interprets neither, so what a key means is this operator's contract rather
+	// than garam's.
+	Tools ToolSet
+
+	// Ignored names the value keys this operator does not read, sorted. It
+	// carries the names and never the strings beside them: a key this operator
+	// holds no contract for is one it cannot act on, and the name is the whole
+	// of what a report about it can say.
+	Ignored []string
 
 	// Claim is the agent's assignment where the definition is claimed, and nil
 	// where it is not. garam admits no claimant but the operator a definition
 	// names, so a claim it reports here was made by this operator.
 	Claim *Claim
+}
+
+// ToolSet is what a definition declares about the tools its agent accepts.
+type ToolSet struct {
+	// Pins name the manifest each tool is accepted at, keyed by the tool's own
+	// name, and are nil where the definition declares none. A pin is opaque: it
+	// is carried to the agent and read nowhere here.
+	Pins map[string]string
 }
 
 // Claim is the assignment a definition's claim wrote, as garam reports it now.

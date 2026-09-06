@@ -82,28 +82,36 @@ func (a *Agent) HasCredential(ctx context.Context, agent garam.GRN) (bool, error
 	return true, nil
 }
 
-// Construct creates the Agent for agent and places credential in the Secret its
-// spec names. The Agent comes first so that the Secret is owned by it and goes
-// when it goes; until the Secret arrives the Agent reports the workload unbuilt,
-// which is the state the reconciler already answers.
-func (a *Agent) Construct(ctx context.Context, agent garam.GRN, epoch int64, credential garam.AgentCredential) error {
-	constructed, err := a.ensureAgent(ctx, agent, epoch)
+// Construct creates the Agent definition describes and places credential in the
+// Secret its spec names. The Agent comes first so that the Secret is owned by it
+// and goes when it goes; until the Secret arrives the Agent reports the workload
+// unbuilt, which is the state the reconciler already answers.
+func (a *Agent) Construct(ctx context.Context, definition garam.Definition, epoch int64,
+	credential garam.AgentCredential) error {
+	constructed, err := a.ensureAgent(ctx, definition, epoch)
 	if err != nil {
 		return err
 	}
 	return a.placeCredential(ctx, constructed, credential)
 }
 
-// ensureAgent creates the Agent for agent where the namespace does not carry
-// one, and reports the GRN it was constructed from and the epoch garam holds it
-// at on it.
-func (a *Agent) ensureAgent(ctx context.Context, agent garam.GRN, epoch int64) (*agentv1alpha1.Agent, error) {
+// ensureAgent creates the Agent definition describes where the namespace does
+// not carry one, and reports the GRN it was constructed from and the epoch garam
+// holds it at on it.
+//
+// The spec it writes is this operator's configuration and the definition's
+// declaration, and the two never overlap: what a definition declares is the tool
+// set, and what a definition cannot name is the image and the storage size.
+func (a *Agent) ensureAgent(ctx context.Context, definition garam.Definition,
+	epoch int64) (*agentv1alpha1.Agent, error) {
+	agent := definition.Agent
 	constructed := &agentv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: Name(agent), Namespace: a.namespace},
 		Spec: agentv1alpha1.AgentSpec{
 			Image:                 a.image,
 			CredentialsSecretName: Name(agent) + credentialsSecretSuffix,
 			StorageSize:           a.storageSize,
+			Tools:                 agentv1alpha1.ToolSet{Pins: definition.Tools.Pins},
 		},
 	}
 
