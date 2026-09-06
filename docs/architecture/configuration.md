@@ -10,7 +10,7 @@ How this operator's deployment is configured, and which repository owns each val
 
 | Flag | Why the base owns it |
 |---|---|
-| `--agent-copy-image` | The init container is in every agent's Pod, so every deployment needs the flag. What it asks of the image is a shell and `install` and nothing of the agent, which no environment answers differently. |
+| `--agent-copy-image` | The init container is in every agent's Pod, so every deployment needs the flag. What it asks of the image is a shell, `install` and `mkdir`, and nothing of the agent, which no environment answers differently. |
 | `--garam-credential-secret` | The base's manager Pod already mounts that Secret by name. The two names have to agree, and an owner that held one of them would leave the pair spanning two repositories. |
 | `--garam-certificate-file`, `--garam-key-file` | Paths inside the container, under the `mountPath` the same file writes. Each file's base name is also the Secret key the renewal is written to, so the pair fixes this operator's contract with whoever mints the Secret. |
 | `--garam-trust-file` | The same, and it names the role rather than the certificate: what `garam`'s listener is verified against has already moved once, and only the file's contents moved with it. |
