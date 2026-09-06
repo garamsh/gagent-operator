@@ -23,11 +23,14 @@ func answerJSON(w http.ResponseWriter, status int, body string) {
 	_, _ = w.Write([]byte(body))
 }
 
-func TestClientListDefinitionsReadsTheAgentValuesAndClaimGaramAnswers(t *testing.T) {
+func TestClientListDefinitionsReadsTheAgentToolSetAndClaimGaramAnswers(t *testing.T) {
 	g := NewWithT(t)
 	stub := newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
 		answerJSON(w, http.StatusOK, `[
-			{"agentGrn": "`+string(sampleAgent)+`", "values": {"model": "haiku"}},
+			{"agentGrn": "`+string(sampleAgent)+`", "values": {
+				"tools.pins.message_send": "sha256:aa",
+				"tools.pins.files": "sha256:bb"
+			}},
 			{"agentGrn": "grn:acme:default:agent:0a1b2c3d4e5f6071", "values": {}, "claim": {"epoch": 3}}
 		]`)
 	})
@@ -36,12 +39,71 @@ func TestClientListDefinitionsReadsTheAgentValuesAndClaimGaramAnswers(t *testing
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(definitions).To(Equal([]garam.Definition{
-		{Agent: sampleAgent, Values: map[string]string{"model": "haiku"}, Claim: nil},
-		{Agent: "grn:acme:default:agent:0a1b2c3d4e5f6071", Values: map[string]string{}, Claim: &garam.Claim{Epoch: 3}},
+		{Agent: sampleAgent, Tools: garam.ToolSet{Pins: map[string]string{
+			"message_send": "sha256:aa",
+			"files":        "sha256:bb",
+		}}, Claim: nil},
+		{Agent: "grn:acme:default:agent:0a1b2c3d4e5f6071", Claim: &garam.Claim{Epoch: 3}},
 	}))
 	g.Expect(stub.requests()).To(HaveLen(1))
 	g.Expect(stub.requests()[0].method).To(Equal(http.MethodGet))
 	g.Expect(stub.requests()[0].path).To(Equal("/definitions"))
+}
+
+func TestClientListDefinitionsCarriesTheKeysItReadsAndNamesTheRestUnread(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
+		answerJSON(w, http.StatusOK, `[{"agentGrn": "`+string(sampleAgent)+`", "values": {
+			"tools.pins.files": "sha256:bb",
+			"model": "haiku",
+			"image": "example.com/somebody-elses:latest",
+			"tools.pins": "sha256:cc",
+			"tools.pins.": "sha256:dd"
+		}}]`)
+	})
+
+	definitions, err := garam.NewClient(stub.address(), trustedBy(t, stub)).ListDefinitions(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(definitions).To(HaveLen(1))
+
+	// The control: the key family this operator holds a contract for is read, so
+	// what is left below is unread for want of a contract and not because the
+	// whole answer was dropped.
+	g.Expect(definitions[0].Tools.Pins).To(Equal(map[string]string{"files": "sha256:bb"}))
+
+	// Sorted, and names only: a key this operator cannot act on says nothing
+	// worth carrying but its own name, and an image key is the one this closed
+	// set exists to leave outside.
+	g.Expect(definitions[0].Ignored).To(Equal([]string{"image", "model", "tools.pins", "tools.pins."}))
+}
+
+func TestClientListDefinitionsIgnoresNothingWhereEveryKeyIsRead(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
+		answerJSON(w, http.StatusOK,
+			`[{"agentGrn": "`+string(sampleAgent)+`", "values": {"tools.pins.files": "sha256:bb"}}]`)
+	})
+
+	definitions, err := garam.NewClient(stub.address(), trustedBy(t, stub)).ListDefinitions(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(definitions).To(HaveLen(1))
+	g.Expect(definitions[0].Ignored).To(BeEmpty())
+}
+
+func TestClientListDefinitionsDeclaresNoToolSetWhereTheAnswerCarriesNoPin(t *testing.T) {
+	g := NewWithT(t)
+	stub := newStubListener(t, func(w http.ResponseWriter, _ *http.Request) {
+		answerJSON(w, http.StatusOK,
+			`[{"agentGrn": "`+string(sampleAgent)+`", "values": {"model": "haiku"}}]`)
+	})
+
+	definitions, err := garam.NewClient(stub.address(), trustedBy(t, stub)).ListDefinitions(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(definitions).To(HaveLen(1))
+
+	// Nil and not empty: a definition declaring no pin is not one declaring an
+	// empty set, and only the first leaves nothing placed.
+	g.Expect(definitions[0].Tools.Pins).To(BeNil())
 }
 
 func TestClientListDefinitionsRefusesAnAnswerNamingNoAgent(t *testing.T) {

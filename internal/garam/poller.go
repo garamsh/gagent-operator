@@ -62,8 +62,16 @@ func (p *Poller) poll(ctx context.Context) {
 			}
 			claim = &Claim{Epoch: assignment.Epoch}
 		}
+		if len(definition.Ignored) > 0 {
+			// Per-pass detail rather than a state change: a definition carrying a
+			// stray key reports it on every pass, because a poll has no memory.
+			// The names travel and the strings beside them do not — a key with no
+			// contract here is one nothing can act on.
+			log.V(1).Info("Ignored the values of a definition this operator holds no contract for",
+				"agent", definition.Agent, "keys", definition.Ignored)
+		}
 		p.correct(ctx, definition.Agent)
-		p.construct(ctx, definition.Agent, claim.Epoch)
+		p.construct(ctx, definition, claim.Epoch)
 	}
 }
 
@@ -123,8 +131,9 @@ func (p *Poller) claim(ctx context.Context, agent GRN) (Assignment, bool) {
 // epoch whoever holds it, so an epoch refreshed from a later poll would read
 // current however long ago this operator was replaced — and a report carrying
 // it could never be found stale, which is what the epoch is on the report for.
-func (p *Poller) construct(ctx context.Context, agent GRN, epoch int64) {
+func (p *Poller) construct(ctx context.Context, definition Definition, epoch int64) {
 	log := logf.FromContext(ctx).WithName("garam")
+	agent := definition.Agent
 
 	placed, err := p.constructor.HasCredential(ctx, agent)
 	if err != nil {
@@ -148,7 +157,7 @@ func (p *Poller) construct(ctx context.Context, agent GRN, epoch int64) {
 		return
 	}
 
-	if err := p.constructor.Construct(ctx, agent, epoch, credential); err != nil {
+	if err := p.constructor.Construct(ctx, definition, epoch, credential); err != nil {
 		log.Error(err, "Lost a certificate garam issued an agent: it exists nowhere else, and the next "+
 			"pass asks for another rather than retrying this write", "agent", agent)
 		return

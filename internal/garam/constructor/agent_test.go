@@ -48,6 +48,12 @@ var sampleCredential = garam.AgentCredential{
 	NotAfter:       time.Date(2026, 8, 26, 15, 1, 43, 0, time.UTC),
 }
 
+// definitionOf is what garam answers for agent where the definition declares
+// nothing this operator reads, which is every case but the tool set's own.
+func definitionOf(agent garam.GRN) garam.Definition {
+	return garam.Definition{Agent: agent}
+}
+
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 
@@ -82,7 +88,7 @@ func TestConstructBuildsTheAgentFromTheOperatorsOwnConfiguration(t *testing.T) {
 	scheme := newScheme(t)
 	c := newClient(scheme)
 
-	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
+	err := newConstructor(t, scheme, c).Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	constructed := &agentv1alpha1.Agent{}
@@ -95,6 +101,37 @@ func TestConstructBuildsTheAgentFromTheOperatorsOwnConfiguration(t *testing.T) {
 	g.Expect(constructed.Status.Agent).To(Equal(string(sampleAgent)))
 }
 
+func TestConstructDeclaresTheToolSetTheDefinitionCarriesAndNoneWhereItCarriesNone(t *testing.T) {
+	g := NewWithT(t)
+	scheme := newScheme(t)
+	c := newClient(scheme)
+	declaring := garam.Definition{
+		Agent: sampleAgent,
+		Tools: garam.ToolSet{Pins: map[string]string{"files": "sha256:bb", "message_send": "sha256:aa"}},
+	}
+
+	building := newConstructor(t, scheme, c)
+	g.Expect(building.Construct(context.Background(), declaring, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(otherAgent), sampleEpoch, sampleCredential)).
+		To(Succeed())
+
+	constructed := &agentv1alpha1.Agent{}
+	g.Expect(c.Get(context.Background(),
+		client.ObjectKey{Namespace: namespace, Name: constructor.Name(sampleAgent)}, constructed)).To(Succeed())
+	g.Expect(constructed.Spec.Tools.Pins).To(Equal(map[string]string{
+		"files":        "sha256:bb",
+		"message_send": "sha256:aa",
+	}))
+
+	// The control: a definition declaring nothing constructs an agent declaring
+	// nothing, so the pins above came from the definition rather than from
+	// anything this operator writes on every agent.
+	bare := &agentv1alpha1.Agent{}
+	g.Expect(c.Get(context.Background(),
+		client.ObjectKey{Namespace: namespace, Name: constructor.Name(otherAgent)}, bare)).To(Succeed())
+	g.Expect(bare.Spec.Tools.Pins).To(BeNil())
+}
+
 // TestConstructRecordsTheEpochGaramHoldsTheAgentAt is what makes a report to
 // garam possible at all. A definition is claimed once, so an operator that did
 // not record the epoch here has no route left that answers the one it holds the
@@ -104,7 +141,7 @@ func TestConstructRecordsTheEpochGaramHoldsTheAgentAt(t *testing.T) {
 	scheme := newScheme(t)
 	c := newClient(scheme)
 
-	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
+	err := newConstructor(t, scheme, c).Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	constructed := &agentv1alpha1.Agent{}
@@ -123,7 +160,7 @@ func TestConstructPlacesEveryPartOfTheCredentialUnderItsOwnKey(t *testing.T) {
 	scheme := newScheme(t)
 	c := newClient(scheme)
 
-	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
+	err := newConstructor(t, scheme, c).Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	secret := &corev1.Secret{}
@@ -146,7 +183,7 @@ func TestConstructOwnsTheCredentialByTheAgentItBelongsTo(t *testing.T) {
 	scheme := newScheme(t)
 	c := newClient(scheme)
 
-	err := newConstructor(t, scheme, c).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
+	err := newConstructor(t, scheme, c).Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	secret := &corev1.Secret{}
@@ -168,7 +205,7 @@ func TestHasCredentialReportsWhatTheNamespaceCarries(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(placed).To(BeFalse())
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
 
 	placed, err = building.HasCredential(context.Background(), sampleAgent)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -191,12 +228,12 @@ func TestConstructReplacesNoCredentialItAlreadyPlaced(t *testing.T) {
 	c := newClient(scheme)
 	building := newConstructor(t, scheme, c)
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
 
 	renewed := sampleCredential
 	renewed.CertificatePEM = []byte("a certificate the agent renewed for itself")
 	renewed.KeyPEM = []byte("the key it was renewed with")
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, renewed)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, renewed)).To(Succeed())
 
 	secret := &corev1.Secret{}
 	g.Expect(c.Get(context.Background(), client.ObjectKey{
@@ -212,8 +249,8 @@ func TestConstructAdoptsTheAgentItAlreadyBuilt(t *testing.T) {
 	c := newClient(scheme)
 	building := newConstructor(t, scheme, c)
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
 
 	agents := &agentv1alpha1.AgentList{}
 	g.Expect(c.List(context.Background(), agents, client.InNamespace(namespace))).To(Succeed())
@@ -243,7 +280,7 @@ func TestHasCredentialReportsNothingHeldWhereOnlyTheAgentWasBuilt(t *testing.T) 
 		}).Build()
 	building := newConstructor(t, scheme, refusing)
 
-	g.Expect(building.Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(MatchError(errAPIRefusal))
+	g.Expect(building.Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(MatchError(errAPIRefusal))
 
 	// The Agent stands, so that the answer below is the credential and not an
 	// agent that was never built.
@@ -274,7 +311,7 @@ func TestConstructReportsWhatTheAPIRefused(t *testing.T) {
 			},
 		}).Build()
 
-	err := newConstructor(t, scheme, refusing).Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)
+	err := newConstructor(t, scheme, refusing).Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)
 
 	g.Expect(err).To(MatchError(errAPIRefusal))
 	g.Expect(err).To(MatchError(ContainSubstring(string(sampleAgent))))
@@ -311,7 +348,7 @@ func TestConstructNamesTheAgentInTheOperatorsOwnNamespace(t *testing.T) {
 	c := newClient(scheme)
 
 	g.Expect(newConstructor(t, scheme, c).
-		Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+		Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
 
 	agents := &agentv1alpha1.AgentList{}
 	g.Expect(c.List(context.Background(), agents)).To(Succeed())
@@ -356,7 +393,7 @@ func TestCorrectImageBringsAConstructedAgentToTheOperatorsConfiguration(t *testi
 	c := newClient(scheme)
 
 	g.Expect(newConstructor(t, scheme, c).
-		Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+		Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
 	g.Expect(imageOf(t, c, sampleAgent)).To(Equal(image))
 
 	corrected, err := newCorrector(t, scheme, c).CorrectImage(context.Background(), sampleAgent)
@@ -377,7 +414,7 @@ func TestCorrectImageWritesNothingWhereTheImageIsAlreadyCurrent(t *testing.T) {
 	correcting := newCorrector(t, scheme, c)
 
 	g.Expect(newConstructor(t, scheme, c).
-		Construct(context.Background(), sampleAgent, sampleEpoch, sampleCredential)).To(Succeed())
+		Construct(context.Background(), definitionOf(sampleAgent), sampleEpoch, sampleCredential)).To(Succeed())
 
 	// The first correction, so that the answer below is an image already current
 	// and not one this operator declined to write at all.
@@ -414,7 +451,7 @@ func TestCorrectImageLeavesTheSpecOfAnAgentThisOperatorDidNotConstructAlone(t *t
 	}
 	g.Expect(c.Create(context.Background(), written)).To(Succeed())
 	g.Expect(newConstructor(t, scheme, c).
-		Construct(context.Background(), otherAgent, sampleEpoch, sampleCredential)).To(Succeed())
+		Construct(context.Background(), definitionOf(otherAgent), sampleEpoch, sampleCredential)).To(Succeed())
 
 	refused, err := correcting.CorrectImage(context.Background(), sampleAgent)
 	g.Expect(err).NotTo(HaveOccurred())

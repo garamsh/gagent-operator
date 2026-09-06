@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -298,11 +300,48 @@ type claimPayload struct {
 	Epoch int64 `json:"epoch"`
 }
 
+// toolPinPrefix is the one value-key family this operator reads. The suffix is
+// a tool's name and the string beside it is that tool's pin. The name is
+// gagent's own setting name, because this operator has to write that setting
+// anyway.
+const toolPinPrefix = "tools.pins."
+
+// readValues is where a definition's free-form values stop being free-form.
+// garam's answer is a third-party map and this is the one place it is read, so
+// what travels on is the typed selection and the names of the keys that were
+// not read — never the map, which is what keeps a key this operator has no
+// contract for from reaching the workload.
+//
+// A key the selection does not cover is ignored rather than refused: this
+// operator cannot tell a typo from a key a later release understands, and
+// refusing would turn either into an agent that never runs.
+func readValues(values map[string]string) (ToolSet, []string) {
+	var tools ToolSet
+	var ignored []string
+	for key, value := range values {
+		name, found := strings.CutPrefix(key, toolPinPrefix)
+		if !found || name == "" {
+			ignored = append(ignored, key)
+			continue
+		}
+		if tools.Pins == nil {
+			tools.Pins = make(map[string]string)
+		}
+		tools.Pins[name] = value
+	}
+	// Sorted, so that what is reported about one definition does not change
+	// between passes that read the same answer.
+	slices.Sort(ignored)
+
+	return tools, ignored
+}
+
 func (p definitionPayload) definition() (Definition, error) {
 	if p.AgentGRN == "" {
 		return Definition{}, errors.New("a definition garam answered names no agent")
 	}
-	definition := Definition{Agent: GRN(p.AgentGRN), Values: p.Values}
+	definition := Definition{Agent: GRN(p.AgentGRN)}
+	definition.Tools, definition.Ignored = readValues(p.Values)
 	if p.Claim != nil {
 		if p.Claim.Epoch < 1 {
 			return Definition{}, fmt.Errorf("a definition garam answered claims %s at no epoch", p.AgentGRN)

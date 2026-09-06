@@ -48,6 +48,29 @@ type AgentSpec struct {
 	// limited to. Unset leaves the container without requests or limits.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitzero"`
+
+	// tools declares the tool set this agent accepts. Unset declares none, and
+	// an agent handed no tool set runs its tools unpinned and says so at startup.
+	// Declaring one is a statement about the tool tree this operator mounted, so
+	// it is delivered to the agent and read nowhere here.
+	// +optional
+	Tools ToolSet `json:"tools,omitzero"`
+}
+
+// ToolSet is what an Agent declares about the tools it accepts.
+type ToolSet struct {
+	// pins name the manifest each tool is accepted at, keyed by the tool's own
+	// name. A pin is opaque here: this operator carries it to the agent and
+	// never reads it, so what one means and what a wrong one does are the
+	// agent's. The set is the whole of what the agent accepts rather than a
+	// filter over it — an agent that finds a tool this does not name refuses to
+	// start — so a partial set is not a partial statement, while a pin naming a
+	// tool the tree does not carry is never consulted. Declaring it empty is
+	// refused here rather than delivered: the agent refuses a pin section naming
+	// no tool, so an empty one is an agent that cannot start.
+	// +optional
+	// +kubebuilder:validation:MinProperties=1
+	Pins map[string]string `json:"pins,omitempty"`
 }
 
 // AgentStatus defines the observed state of Agent.
