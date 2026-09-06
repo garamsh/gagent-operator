@@ -30,6 +30,13 @@ const testPinnedTool = "message_send"
 // operator, which is why no spec asserts anything about its shape.
 const testToolPin = "sha256:aa"
 
+// testSecondTool and testSecondPin are a second tool in a declaration, which is
+// what says a set is carried whole rather than one tool at a time.
+const (
+	testSecondTool = "files"
+	testSecondPin  = "sha256:bb"
+)
+
 var _ = Describe("Agent workload", func() {
 	It("builds the StatefulSet the Agent describes, and owns it", func() {
 		name := "builds-its-workload"
@@ -468,7 +475,7 @@ var _ = Describe("Agent workload", func() {
 		name := "declares-a-tool-set"
 		createSecret(credentialsSecretName(name))
 		agent := newAgent(name)
-		agent.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin, "files": "sha256:bb"}
+		agent.Spec.Tools.Pins = map[string]string{testPinnedTool: testToolPin, testSecondTool: testSecondPin}
 		createAgent(agent)
 
 		_, err := reconcileAgentWithTools(name)
@@ -493,7 +500,7 @@ var _ = Describe("Agent workload", func() {
 
 		By("carrying the file's text to that container and to nothing the agent spawns")
 		Expect(environmentOf(config)).To(HaveKeyWithValue(configContentVariable,
-			SatisfyAll(ContainSubstring(testPinnedTool+": "+testToolPin), ContainSubstring("files: sha256:bb"))))
+			SatisfyAll(ContainSubstring(testPinnedTool+": "+testToolPin), ContainSubstring(testSecondTool+": "+testSecondPin))))
 		agentContainer := containerOf(pod, agentContainerName)
 		Expect(environmentOf(agentContainer)).NotTo(HaveKey(configContentVariable))
 
@@ -508,7 +515,7 @@ var _ = Describe("Agent workload", func() {
 		// A pin is a string this operator does not read and a console user
 		// types. This one closes the quoting a command would carry it in.
 		pins := map[string]string{
-			"files":        `sha256:bb" ; touch escaped ; echo "`,
+			testSecondTool: `sha256:bb" ; touch escaped ; echo "`,
 			testPinnedTool: testToolPin,
 		}
 		file, err := renderAgentConfig(agentv1alpha1.AgentSpec{Tools: agentv1alpha1.ToolSet{Pins: pins}})
@@ -532,6 +539,22 @@ var _ = Describe("Agent workload", func() {
 		written := agentConfig{}
 		Expect(yaml.Unmarshal(content, &written)).To(Succeed())
 		Expect(written.Tools.Pins).To(Equal(pins))
+	})
+
+	It("renders one declaration as one text, whatever order the declaration is held in", func() {
+		// Three tools, held in an order that is not the sorted one. A Go map is
+		// iterated in no fixed order, so a render reading it directly would put
+		// the same declaration in the workload differently from pass to pass,
+		// and every pass would rewrite the StatefulSet.
+		pins := map[string]string{"web_fetch": "sha256:cc", testPinnedTool: testToolPin, testSecondTool: testSecondPin}
+
+		file, err := renderAgentConfig(agentv1alpha1.AgentSpec{Tools: agentv1alpha1.ToolSet{Pins: pins}})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(file).To(Equal("tools:\n  pins:\n" +
+			"    " + testSecondTool + ": " + testSecondPin + "\n" +
+			"    " + testPinnedTool + ": " + testToolPin + "\n" +
+			"    web_fetch: sha256:cc\n"))
 	})
 
 	It("builds the Pod it built before a tool set could be declared where an Agent declares none", func() {
