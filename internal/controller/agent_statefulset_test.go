@@ -2,6 +2,7 @@ package controller
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -231,7 +232,7 @@ var _ = Describe("Agent workload", func() {
 		createSecret(credentialsSecretName(name))
 		createAgent(newAgent(name))
 
-		_, err := reconcileAgentWithTools(name, testToolsImage)
+		_, err := reconcileAgentWithTools(name)
 		Expect(err).NotTo(HaveOccurred())
 
 		pod := statefulSetFor(name).Spec.Template.Spec
@@ -265,7 +266,7 @@ var _ = Describe("Agent workload", func() {
 		withTools := newAgent(named)
 		withTools.Spec.CredentialsSecretName = shared
 		createAgent(withTools)
-		_, err := reconcileAgentWithTools(named, testToolsImage)
+		_, err := reconcileAgentWithTools(named)
 		Expect(err).NotTo(HaveOccurred())
 
 		By("reconciling an Agent identical to it while this operator names none")
@@ -297,7 +298,7 @@ var _ = Describe("Agent workload", func() {
 		createSecret(credentialsSecretName(name))
 		createAgent(newAgent(name))
 
-		_, err := reconcileAgentWithTools(name, testToolsImage)
+		_, err := reconcileAgentWithTools(name)
 		Expect(err).NotTo(HaveOccurred())
 		namespace := restrictedNamespace("psa-" + name)
 
@@ -313,6 +314,138 @@ var _ = Describe("Agent workload", func() {
 			Name:         "host",
 			VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/"}},
 		})
+		Expect(k8sClient.Create(ctx, refused)).
+			To(MatchError(ContainSubstring(`violates PodSecurity "restricted:latest"`)))
+	})
+
+	It("builds the workspace this operator names, and points both ends of the link at one address", func() {
+		name := "carries-a-workspace"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		_, err := reconcileAgentWithWorkspace(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		pod := statefulSetFor(name).Spec.Template.Spec
+
+		By("running it beside the agent, which stays the container an Agent's spec describes")
+		Expect(pod.Containers).To(HaveLen(2))
+		Expect(pod.Containers[0].Name).To(Equal(agentContainerName))
+		workspace := containerOf(pod, workspaceContainerName)
+		Expect(workspace.Image).To(Equal(testWorkspaceImage))
+		Expect(workspace.ImagePullPolicy).To(Equal(corev1.PullAlways))
+
+		By("telling the workspace where to listen and the agent the same place to dial")
+		listen := environmentOf(workspace)
+		Expect(listen[listenAddressVariable]).To(Equal(workspaceAddress))
+		Expect(environmentOf(pod.Containers[0])[workspaceAddressVariable]).To(Equal(listen[listenAddressVariable]))
+
+		By("giving it a directory on the volume the agent's state is claimed on, which it can create in")
+		Expect(workspace.VolumeMounts).To(ConsistOf(
+			corev1.VolumeMount{Name: stateVolumeName, MountPath: stateMountPath}))
+		Expect(listen[workspaceDirVariable]).To(HavePrefix(stateMountPath + "/"))
+
+		By("leaving what its image runs alone, and mounting it no credential it does not read")
+		Expect(workspace.Command).To(BeEmpty())
+		Expect(workspace.Args).To(BeEmpty())
+		Expect(workspace.VolumeMounts).NotTo(ContainElement(HaveField("Name", credentialsVolumeName)))
+	})
+
+	It("tells the workspace to run exec children as the user the Pod names, which is what lets it run any", func() {
+		name := "agrees-on-one-uid"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		_, err := reconcileAgentWithWorkspace(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		pod := statefulSetFor(name).Spec.Template.Spec
+		workspace := containerOf(pod, workspaceContainerName)
+
+		By("naming no user of its own, so the Pod's is the user it runs as")
+		Expect(workspace.SecurityContext.RunAsUser).To(BeNil())
+		Expect(pod.SecurityContext.RunAsUser).NotTo(BeNil())
+
+		By("stating that same user as the account exec children run under, which gagent refuses to guess")
+		Expect(environmentOf(workspace)[execUserVariable]).
+			To(Equal(strconv.FormatInt(*pod.SecurityContext.RunAsUser, 10)))
+	})
+
+	It("builds the Pod it built before a workspace existed where this operator names no workspace image", func() {
+		shared := "shared-workspace-credentials"
+		createSecret(shared)
+
+		By("reconciling an Agent while this operator names a workspace image")
+		named := "workspace-image-named"
+		withWorkspace := newAgent(named)
+		withWorkspace.Spec.CredentialsSecretName = shared
+		createAgent(withWorkspace)
+		_, err := reconcileAgentWithWorkspace(named)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("reconciling an Agent identical to it while this operator names none")
+		unnamed := "workspace-image-unset"
+		withoutWorkspaceImage := newAgent(unnamed)
+		withoutWorkspaceImage.Spec.CredentialsSecretName = shared
+		createAgent(withoutWorkspaceImage)
+		_, err = reconcileAgent(unnamed)
+		Expect(err).NotTo(HaveOccurred())
+
+		unset := statefulSetFor(unnamed).Spec.Template.Spec
+
+		By("carrying no second container and telling the agent to dial nothing")
+		Expect(unset.Containers).To(HaveLen(1))
+		Expect(unset.Containers[0].Env).To(BeEmpty())
+
+		set := statefulSetFor(named).Spec.Template.Spec
+
+		By("differing from the Pod built with one, which is what leaves the comparison below something to isolate")
+		Expect(set).NotTo(Equal(unset))
+
+		By("differing from it in those two places and in nothing else")
+		Expect(withoutWorkspace(set)).To(Equal(unset))
+	})
+
+	It("takes the workspace back out when this operator stops naming an image for it", func() {
+		name := "drops-its-workspace"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		_, err := reconcileAgentWithWorkspace(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(statefulSetFor(name).Spec.Template.Spec.Containers).To(HaveLen(2))
+
+		_, err = reconcileAgent(name)
+		Expect(err).NotTo(HaveOccurred())
+
+		pod := statefulSetFor(name).Spec.Template.Spec
+		Expect(pod.Containers).To(HaveLen(1))
+		Expect(pod.Containers[0].Name).To(Equal(agentContainerName))
+		Expect(pod.Containers[0].Env).To(BeEmpty())
+	})
+
+	It("builds a Pod carrying the workspace that a namespace enforcing PodSecurity restricted admits", func() {
+		name := "workspace-satisfies-restricted"
+		createSecret(credentialsSecretName(name))
+		createAgent(newAgent(name))
+
+		_, err := reconcileAgentWithWorkspace(name)
+		Expect(err).NotTo(HaveOccurred())
+		namespace := restrictedNamespace("psa-" + name)
+
+		By("creating the Pod the StatefulSet describes, which carries the workspace and which is admitted")
+		admitted := podOf(statefulSetFor(name), namespace)
+		Expect(admitted.Spec.Containers).To(HaveLen(2))
+		Expect(k8sClient.Create(ctx, admitted)).To(Succeed())
+
+		By("creating the same Pod with the capability gagent needs only on the root path, which it refuses")
+		refused := podOf(statefulSetFor(name), namespace)
+		refused.Name += "-privileged"
+		at := slices.IndexFunc(refused.Spec.Containers, func(container corev1.Container) bool {
+			return container.Name == workspaceContainerName
+		})
+		Expect(at).To(BeNumerically(">=", 0))
+		refused.Spec.Containers[at].SecurityContext.Capabilities.Add = []corev1.Capability{"SYS_ADMIN"}
 		Expect(k8sClient.Create(ctx, refused)).
 			To(MatchError(ContainSubstring(`violates PodSecurity "restricted:latest"`)))
 	})
@@ -380,6 +513,56 @@ func volumeNamed(pod corev1.PodSpec, name string) corev1.Volume {
 	Fail("the Pod carries no volume named " + name)
 
 	return corev1.Volume{}
+}
+
+// containerOf returns the Pod's container called name, and fails the spec where
+// it carries none.
+func containerOf(pod corev1.PodSpec, name string) corev1.Container {
+	GinkgoHelper()
+
+	for _, container := range pod.Containers {
+		if container.Name == name {
+			return container
+		}
+	}
+
+	Fail("the Pod carries no container named " + name)
+
+	return corev1.Container{}
+}
+
+// environmentOf returns a container's environment as the map a spec reads one
+// variable out of, so that asserting on one says nothing about the order the
+// rest are written in.
+func environmentOf(container corev1.Container) map[string]string {
+	environment := map[string]string{}
+	for _, variable := range container.Env {
+		environment[variable.Name] = variable.Value
+	}
+
+	return environment
+}
+
+// withoutWorkspace returns the Pod spec with the workspace's container and the
+// variable pointing the agent at it removed. What is left is what this operator
+// builds where it names no workspace image, so the two being equal is what says
+// the unset flag adds nothing anywhere else.
+func withoutWorkspace(pod corev1.PodSpec) corev1.PodSpec {
+	stripped := *pod.DeepCopy()
+	stripped.Containers = slices.DeleteFunc(stripped.Containers, func(container corev1.Container) bool {
+		return container.Name == workspaceContainerName
+	})
+	for i := range stripped.Containers {
+		stripped.Containers[i].Env = slices.DeleteFunc(stripped.Containers[i].Env,
+			func(variable corev1.EnvVar) bool { return variable.Name == workspaceAddressVariable })
+		// A slice emptied is not a slice absent, and it is the absent one the
+		// Pod built without a workspace carries.
+		if len(stripped.Containers[i].Env) == 0 {
+			stripped.Containers[i].Env = nil
+		}
+	}
+
+	return stripped
 }
 
 // withoutToolTree returns the Pod spec with the tool tree's volume, its mount

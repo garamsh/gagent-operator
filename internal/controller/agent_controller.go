@@ -33,6 +33,11 @@ type AgentReconciler struct {
 	// from, mounted read-only into the agent's container. Empty builds the Pod
 	// with no tool tree at all.
 	ToolsImage string
+
+	// WorkspaceImage is the image the agent's workspace container runs: the
+	// process serving the files an agent reads and writes and the commands it
+	// executes. Empty builds the Pod with no workspace at all.
+	WorkspaceImage string
 }
 
 // +kubebuilder:rbac:groups=agent.garam.sh,resources=agents,verbs=get;list;watch
