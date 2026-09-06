@@ -27,7 +27,7 @@ These documents assign authority to two roles. One party may hold both; the rule
 
 The PM writes a worker's task spec. The items below are true of every dispatch here, so they belong in every spec rather than in whoever writes it. The first was worked out on issue #81, kept nowhere, and forgotten on the next dispatch — which is what this section is for.
 
-- **Create the task branch inside the given worktree, before the first commit.** `git switch -c <category>/<short-name>`, per `docs/convention/git.md` §Branches. The tooling names a worktree's branch after the git account; that name is not the project's, and switching keeps the dispatch binding.
+- **Create the task branch inside the given worktree, before the first commit.** `git switch -c <category>/<short-name>`, per `docs/convention/git.md` §Branches. The branch a worktree arrives on is not the project's to assume; issue #81 records what the tooling produced, the measurement, and why switching is the remedy.
 - **Read `AGENTS.md`, then `docs/convention/README.md`, then `docs/architecture/README.md`, before the code** — from the files, not from memory.
 - **Open the pull request against `dev`**, and answer the template's question about which convention files were opened accurately.
 - **Run the checks locally and report what ran.** A check that did not run is reported as not run, never as passing.
