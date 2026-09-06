@@ -76,7 +76,7 @@ const (
 	// configContentVariable carries the file's whole text to the init container
 	// that writes it. It is set on that container and on no other, so nothing the
 	// agent spawns inherits a pin set — which is the custody gagent refuses the
-	// environment road to keep (gagent@fc5fca4:internal/config/config.go:212-234).
+	// environment road to keep (gagent@fc5fca4:internal/config/config.go:216-234).
 	configContentVariable = "AGENT_CONFIG_CONTENT"
 
 	// configFileMask leaves the file readable by its owner and nobody else.
@@ -165,7 +165,7 @@ func copyCredentialsCommand() []string {
 
 // configDirIn and configFileIn are where gagent looks for a config file under
 // the configuration directory dir. Both segments are that project's rather than
-// this operator's to choose (gagent@fc5fca4:internal/config/config.go:186-190
+// this operator's to choose (gagent@fc5fca4:internal/config/config.go:187
 // and :382-395); the directory they hang off is the part this operator names.
 func configDirIn(dir string) string { return dir + "/gagent" }
 
